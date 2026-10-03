@@ -53,11 +53,19 @@ jobs:
           echo ${{ secrets.SIGNING_KEY }} | base64 --decode > release.keystore
         fi
 
-    - name: Git describe
+    - name: Determine Version Name
       id: ghd
-      uses: proudust/gh-describe@v2.1.0
-      with:
-        exclude: v*-*
+      run: |
+        SHA=$(git rev-parse HEAD)
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        DESCRIBE=$(git describe --tags --always 2>/dev/null || true)
+        if [ -z "$DESCRIBE" ] || [ "$DESCRIBE" = "$SHORT_SHA" ]; then
+          COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+          DESCRIBE="v1.0.${COUNT}-${SHORT_SHA}"
+        fi
+        echo "describe=$DESCRIBE" >> $GITHUB_OUTPUT
+        echo "sha=$SHA" >> $GITHUB_OUTPUT
+        echo "Calculated version: $DESCRIBE"
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
