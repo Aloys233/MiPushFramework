@@ -45,6 +45,12 @@ public class MiPushFrameworkApp extends Application {
     @Override
     public void attachBaseContext(Context context) {
         super.attachBaseContext(context);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("");
+            } catch (Throwable ignored) {
+            }
+        }
         DatabaseUtils.init(this);
     }
 
@@ -114,8 +120,12 @@ public class MiPushFrameworkApp extends Application {
 
         Intent removeDozeActivityIntent = new Intent().setComponent(
                 new ComponentName(Constants.SERVICE_APP_NAME, Constants.REMOVE_DOZE_COMPONENT_NAME));
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0,
-                removeDozeActivityIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+                removeDozeActivityIntent, flags);
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_WARN)
                 .setContentInfo(getString(R.string.wizard_title_doze_whitelist))
                 .setContentTitle(getString(R.string.wizard_title_doze_whitelist))

@@ -19,9 +19,13 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    buildFeatures {
+        buildConfig true
+    }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
     lintOptions {
         abortOnError false
@@ -32,7 +36,7 @@ android {
 android.libraryVariants.all { variant ->
     String taskName = String.format("remove%sStubClasses", variant.name.capitalize())
     task "${taskName}" {
-        doLast { delete "${buildDir}/intermediates/classes/${variant.name}" + "/android" }
+        doLast { delete "${layout.buildDirectory.get().asFile}/intermediates/classes/${variant.name}" + "/android" }
     }
     variant.getProcessJavaResourcesProvider().get().dependsOn(taskName)
 }

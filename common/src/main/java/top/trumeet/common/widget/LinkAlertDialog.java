@@ -44,7 +44,7 @@ public class LinkAlertDialog extends AlertDialog {
         public Builder setMessage(CharSequence message) {
             TextView textView = new TextView(getContext());
             int padding = (int) getContext().getResources()
-                    .getDimension(R.dimen.abc_dialog_padding_material);
+                    .getDimension(androidx.appcompat.R.dimen.abc_dialog_padding_material);
             textView.setPadding(padding, padding, padding, padding);
             textView.setMovementMethod(LinkMovementMethod.getInstance());
             textView.setText(message);

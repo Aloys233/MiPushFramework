@@ -134,6 +134,9 @@
     <string name="wizard_title_alert_window_permission">显示在其他应用上层</string>
     <string name="wizard_title_alert_window_text">您需要授予“显示在其他应用上层”权限，否则您无法通过配置自动调起应用。</string>
 
+    <string name="wizard_title_post_notification_permission">通知权限</string>
+    <string name="wizard_title_post_notification_permission_text">您需要授予“通知”权限，以便及时接收来自各个应用的重要推送消息。</string>
+
     <string name="wizard_descr_finish">大功告成！本软件已准备就绪。</string>
     <string name="status_ok">成功</string>
 

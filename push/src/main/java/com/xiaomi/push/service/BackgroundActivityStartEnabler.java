@@ -9,7 +9,9 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
+import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Parcel;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
@@ -25,8 +27,14 @@ import java.util.Objects;
 public class BackgroundActivityStartEnabler {
 
     public static @Nullable PendingIntent clonePendingIntentForBackgroundActivityStart(final PendingIntent pi) {
+        if (pi == null) return null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Android 14+ (API 34+) 不再允许通过 Notification 的 mWhitelistToken 反射绕过 BAL，
+            // 且借用 Token 在新系统中可能导致失效或系统抛出安全异常，直接返回原 PendingIntent
+            return pi;
+        }
         final Notification whitelistedN = sWhitelistedNotification;
-        if (whitelistedN == null) return null;
+        if (whitelistedN == null) return pi;
         whitelistedN.contentIntent = pi;
         final Parcel parcel = Parcel.obtain();
         try {
@@ -35,7 +43,10 @@ public class BackgroundActivityStartEnabler {
             final Notification n = Notification.CREATOR.createFromParcel(parcel);
             final PendingIntent whitelisted = n.contentIntent;
             n.contentIntent = null;
-            return whitelisted;
+            return whitelisted != null ? whitelisted : pi;
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to clone PendingIntent, fallback to original", t);
+            return pi;
         } finally {
             parcel.recycle();
             whitelistedN.contentIntent = null;
@@ -43,11 +54,15 @@ public class BackgroundActivityStartEnabler {
     }
 
     public static void initialize(final Context context) {
-        final NotificationManager nm = Objects.requireNonNull(context.getSystemService(NotificationManager.class));
-        String channelId = tryGetValidPushStatusChannelId(context, nm);
-        if (channelId == null) return;
-        notifyPushStatusInitializing(context, channelId, nm);
-        scheduleCapture(nm, 5);
+        try {
+            final NotificationManager nm = Objects.requireNonNull(context.getSystemService(NotificationManager.class));
+            String channelId = tryGetValidPushStatusChannelId(context, nm);
+            if (channelId == null) return;
+            notifyPushStatusInitializing(context, channelId, nm);
+            scheduleCapture(nm, 5);
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to initialize BackgroundActivityStartEnabler", t);
+        }
     }
 
     private static void notifyPushStatusInitializing(Context context, String channelId, NotificationManager nm) {
@@ -60,46 +75,61 @@ public class BackgroundActivityStartEnabler {
 
     private static @Nullable String tryGetValidPushStatusChannelId(Context context, NotificationManager nm) {
         String channelId = CHANNEL_STATUS;
-        for (int channelPostfix = 0; ; ) {
+        for (int channelPostfix = 0; channelPostfix <= 16; ) {
             @Nullable NotificationChannel channel = nm.getNotificationChannel(channelId);
             if (channel == null) {
-                if (CHANNEL_STATUS.equals(channelId)) // todo: need to fix to break infinite loop
-                    continue;     // Never create original channel "status" here.
+                if (CHANNEL_STATUS.equals(channelId)) {
+                    // 原生 "status" 频道尚不存在，不在此创建原生频道，转为尝试临时频道，消除死循环
+                    channelId = CHANNEL_STATUS + (++channelPostfix);
+                    continue;
+                }
                 channel = new NotificationChannel(channelId, context.getString(R.string.notification_category_alive), IMPORTANCE_LOW);
                 nm.createNotificationChannel(channel);
-                break;
+                return channelId;
             } else {
-                if (channel.getImportance() > NotificationManager.IMPORTANCE_NONE) break;
-                if (channelPostfix == 16) {
+                if (channel.getImportance() > NotificationManager.IMPORTANCE_NONE) {
+                    return channelId;
+                }
+                if (channelPostfix >= 16) {
                     Log.e(TAG, "Failed to obtain available notification channel.");
                     return null;
                 }
                 channelId = CHANNEL_STATUS + (++channelPostfix);   // If channel is disabled, try another temporary channel ID.
             }
         }
-        return channelId;
+        return null;
     }
 
     private static void scheduleCapture(final NotificationManager nm, final int retries) {
-        new Handler().postDelayed(() -> {
-            final StatusBarNotification[] ns = nm.getActiveNotifications();
-            findPushStatusInitializingNotification(nm, ns);
-            if (pushStatusInitializingNotificationExists()) {
-                deleteTemporaryChannel(nm);
-            } else if (retries == 0) {
-                Log.e(TAG, "Failed to capture active notification.");
-                nm.cancel(TAG, 0);      // In case it's there but unable to be captured.
-            } else {
-                Log.i(TAG, "Wait to capture active notification.");
-                scheduleCapture(nm, retries - 1);
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                final StatusBarNotification[] ns = nm.getActiveNotifications();
+                findPushStatusInitializingNotification(nm, ns);
+                if (pushStatusInitializingNotificationExists()) {
+                    deleteTemporaryChannel(nm);
+                } else if (retries == 0) {
+                    Log.e(TAG, "Failed to capture active notification.");
+                    nm.cancel(TAG, 0);      // In case it's there but unable to be captured.
+                } else {
+                    Log.i(TAG, "Wait to capture active notification.");
+                    scheduleCapture(nm, retries - 1);
+                }
+            } catch (Throwable t) {
+                Log.e(TAG, "Error in scheduleCapture", t);
             }
         }, 500);
     }
 
     private static void deleteTemporaryChannel(NotificationManager nm) {
-        final String channelId = sWhitelistedNotification.getChannelId();
-        if (!CHANNEL_STATUS.equals(channelId))
-            nm.deleteNotificationChannel(channelId);        // Delete channel if it is temporary
+        if (sWhitelistedNotification != null) {
+            final String channelId = sWhitelistedNotification.getChannelId();
+            if (channelId != null && !CHANNEL_STATUS.equals(channelId)) {
+                try {
+                    nm.deleteNotificationChannel(channelId);        // Delete channel if it is temporary
+                } catch (Throwable ignored) {
+                }
+            }
+        }
     }
 
     private static boolean pushStatusInitializingNotificationExists() {

@@ -1,15 +1,16 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("io.github.wurensen.android-aspectjx")
 }
 
-val mipushLib = file("libs/miuipushsdkshared_3_7_9.jar")
+val hookedLib = file("libs/miuipushsdkshared_3_7_9_hooked.jar")
+val originalLib = file("libs/miuipushsdkshared_3_7_9.jar")
+val mipushLib = if (hookedLib.exists()) hookedLib else originalLib
 extra["mipushLib"] = mipushLib
 
 android {
     namespace = "com.nihility.mipush_hook"
-    compileSdk = 33
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 21
@@ -25,25 +26,17 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "11"
-    }
-
-    aspectjx {
-        // 移除kotlin相关，编译错误和提升速度
-        exclude("kotlin.jvm", "kotlin.internal")
-        exclude("kotlinx.coroutines.internal", "kotlinx.coroutines.android")
-        exclude("test.", "Test")
-        ajcArgs("-inpath", mipushLib.path)
-        debug = false
+        jvmTarget = "17"
     }
 }
 
 dependencies {
-    compileOnly(files(mipushLib))
+    api(files(mipushLib))
+    api("org.aspectj:aspectjrt:1.9.22.1")
     implementation("androidx.startup:startup-runtime:1.1.1")
 
     implementation("androidx.core:core-ktx:1.10.1")

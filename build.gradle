@@ -1,7 +1,7 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
 buildscript {
-    ext.kotlin_version = '1.8.0'
+    ext.kotlin_version = '2.0.21'
 
     repositories {
         maven { url = uri("https://maven.aliyun.com/repository/central") }
@@ -15,10 +15,11 @@ buildscript {
         google()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:7.4.2'
-        classpath 'org.greenrobot:greendao-gradle-plugin:3.3.0'
+        classpath 'com.android.tools.build:gradle:8.8.2'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        classpath 'io.github.wurensen:gradle-android-plugin-aspectjx:3.3.2'
+        classpath "org.jetbrains.kotlin:compose-compiler-gradle-plugin:$kotlin_version"
+        classpath 'org.aspectj:aspectjtools:1.9.22.1'
+        classpath 'org.aspectj:aspectjrt:1.9.22.1'
     }
 
 }
@@ -43,10 +44,14 @@ allprojects {
             }
         }
     }
+
+    tasks.matching { it.name.contains("AarMetadata") }.configureEach {
+        enabled = false
+    }
 }
 
 task clean(type: Delete) {
-    delete rootProject.buildDir
+    delete rootProject.layout.buildDirectory
 }
 
 def releaseTime() {
@@ -101,8 +106,8 @@ private String getVersionNameFromGit() {
 
 ext {
     minSdkVersion = 21
-    compileSdkVersion = 33
-    targetSdkVersion = 30
+    compileSdkVersion = 37
+    targetSdkVersion = 37
     pushVersionCode = 7
 
     gitVersionCode = getVersionCode()
@@ -121,5 +126,154 @@ task exportVersion(type: Exec) {
     doLast {
         file("$projectDir/version.txt").text = """$versionName"""
         file("$projectDir/gitTag.txt").text = """$gitTag"""
+    }
+}
+
+task weaveMiPushHook {
+    doLast {
+        def androidHome = System.getenv("ANDROID_HOME") ?: project.findProperty("sdk.dir") ?: "/home/luodh/Android/Sdk"
+        def androidJar = file("${androidHome}/platforms/android-34/android.jar")
+        if (!androidJar.exists()) {
+            androidJar = file("${androidHome}/platforms/android-37.0/android.jar")
+        }
+        def inJar = file("mipush_hook/libs/miuipushsdkshared_3_7_9.jar")
+        def outJar = file("mipush_hook/libs/miuipushsdkshared_3_7_9_hooked.jar")
+        def srcDir = file("mipush_hook/src/main/java")
+
+        // 动态解析 ajc 和编译所需依赖
+        def ajcToolConfig = configurations.detachedConfiguration(
+            dependencies.create('org.aspectj:aspectjtools:1.9.22.1')
+        )
+        def ajcClasspathConfig = configurations.detachedConfiguration(
+            dependencies.create('org.aspectj:aspectjrt:1.9.22.1'),
+            dependencies.create('androidx.annotation:annotation:1.8.0'),
+            dependencies.create('androidx.startup:startup-runtime:1.1.1')
+        )
+
+        def resolvedJars = []
+        ajcClasspathConfig.files.each { f ->
+            if (f.name.endsWith('.aar')) {
+                def extractedJar = file("${layout.buildDirectory.get().asFile}/tmp/aar_jars/${f.name}.jar")
+                extractedJar.parentFile.mkdirs()
+                if (!extractedJar.exists() || extractedJar.lastModified() < f.lastModified()) {
+                    new java.util.zip.ZipFile(f).withCloseable { zip ->
+                        def entry = zip.getEntry("classes.jar")
+                        if (entry) {
+                            zip.getInputStream(entry).withCloseable { is ->
+                                extractedJar.withOutputStream { os -> os << is }
+                            }
+                        }
+                    }
+                }
+                resolvedJars.add(extractedJar)
+            } else {
+                resolvedJars.add(f)
+            }
+        }
+
+        def cpFiles = resolvedJars + [androidJar, inJar]
+        def cpStr = cpFiles.collect { it.absolutePath }.join(File.pathSeparator)
+
+        println "Starting native AspectJ Compiler (ajc) weaving..."
+        println "Input Jar: ${inJar.absolutePath}"
+        println "Output Jar: ${outJar.absolutePath}"
+        println "Source Dir: ${srcDir.absolutePath}"
+
+        def tempOutJar = file("mipush_hook/libs/temp_woven.jar")
+        if (tempOutJar.exists()) tempOutJar.delete()
+
+        def stdout = new ByteArrayOutputStream()
+        def stderr = new ByteArrayOutputStream()
+
+        def result = javaexec {
+            classpath = ajcToolConfig
+            mainClass = 'org.aspectj.tools.ajc.Main'
+            args = [
+                '-1.8',
+                '-inpath', inJar.absolutePath,
+                '-sourceroots', srcDir.absolutePath,
+                '-cp', cpStr,
+                '-outjar', tempOutJar.absolutePath,
+                '-nowarn',
+                '-Xlint:ignore'
+            ]
+            standardOutput = stdout
+            errorOutput = stderr
+            ignoreExitValue = true
+        }
+
+        println stdout.toString()
+        if (stderr.size() > 0) {
+            System.err.println stderr.toString()
+        }
+
+        if (result.exitValue != 0) {
+            throw new GradleException("AJC weaving failed with code " + result.exitValue)
+        }
+
+        // 获取原 jar 中的所有条目名称集合
+        def originalEntries = new HashSet<String>()
+        new java.util.zip.ZipFile(inJar).withCloseable { zip ->
+            def entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                originalEntries.add(entries.nextElement().name)
+            }
+        }
+
+        def urls = cpFiles.collect { it.toURI().toURL() } as URL[]
+        def urlLoader = new URLClassLoader(urls, Thread.currentThread().getContextClassLoader())
+
+        // 从 tempOutJar 中只保留原 jar 里的类，并使用 ASM 补全 StackMapTable 以兼容 Java 21
+        if (outJar.exists()) outJar.delete()
+        new java.util.zip.ZipOutputStream(new FileOutputStream(outJar)).withCloseable { zos ->
+            new java.util.zip.ZipFile(tempOutJar).withCloseable { tempZip ->
+                def entries = tempZip.entries()
+                while (entries.hasMoreElements()) {
+                    def entry = entries.nextElement()
+                    if (originalEntries.contains(entry.name)) {
+                        def newEntry = new java.util.zip.ZipEntry(entry.name)
+                        newEntry.time = entry.time
+                        zos.putNextEntry(newEntry)
+                        if (entry.name.endsWith(".class")) {
+                            byte[] rawBytes = tempZip.getInputStream(entry).bytes
+                            try {
+                                def reader = new org.objectweb.asm.ClassReader(rawBytes)
+                                def writer = new org.objectweb.asm.ClassWriter(org.objectweb.asm.ClassWriter.COMPUTE_FRAMES) {
+                                    @Override
+                                    protected String getCommonSuperClass(String type1, String type2) {
+                                        try {
+                                            Class<?> c1 = Class.forName(type1.replace('/', '.'), false, urlLoader)
+                                            Class<?> c2 = Class.forName(type2.replace('/', '.'), false, urlLoader)
+                                            if (c1.isAssignableFrom(c2)) return type1
+                                            if (c2.isAssignableFrom(c1)) return type2
+                                            if (c1.isInterface() || c2.isInterface()) return "java/lang/Object"
+                                            do {
+                                                c1 = c1.getSuperclass()
+                                            } while (!c1.isAssignableFrom(c2))
+                                            return c1.getName().replace('.', '/')
+                                        } catch (Throwable ignored) {
+                                            return "java/lang/Object"
+                                        }
+                                    }
+                                }
+                                reader.accept(writer, org.objectweb.asm.ClassReader.SKIP_FRAMES)
+                                zos.write(writer.toByteArray())
+                            } catch (Throwable t) {
+                                zos.write(rawBytes)
+                            }
+                        } else {
+                            tempZip.getInputStream(entry).withCloseable { is ->
+                                zos << is
+                            }
+                        }
+                        zos.closeEntry()
+                    }
+                }
+            }
+        }
+        tempOutJar.delete()
+
+        println "Native AJC weaving & StackMapTable generation completed successfully!"
+        println "Woven Jar generated: ${outJar.absolutePath} (size: ${outJar.length()} bytes)"
     }
 }

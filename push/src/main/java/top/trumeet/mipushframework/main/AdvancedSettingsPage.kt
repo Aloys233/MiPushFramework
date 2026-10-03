@@ -8,8 +8,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.core.view.WindowCompat
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.Surface
@@ -38,6 +41,7 @@ import top.trumeet.ui.theme.Theme
 class AdvancedSettingsPage : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             Theme {
                 window.navigationBarColor = MaterialTheme.colorScheme.surfaceColorAtElevation(
@@ -54,6 +58,8 @@ private fun SettingsApp() {
     Theme {
         Surface(
             modifier = Modifier
+                .statusBarsPadding()
+                .navigationBarsPadding()
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
             color = MaterialTheme.colorScheme.background

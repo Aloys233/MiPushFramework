@@ -10,8 +10,14 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.core.view.WindowCompat
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,6 +40,7 @@ import java.io.InputStreamReader
 class HelpPage : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             val color = SurfaceColors.SURFACE_2.getColor(this)
             window.statusBarColor = color
@@ -56,7 +63,14 @@ fun HelpPage(modifier: Modifier = Modifier) {
 @Composable
 fun HelpList(modifier: Modifier = Modifier) {
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = "list", modifier = modifier) {
+    NavHost(
+        navController = navController,
+        startDestination = "list",
+        modifier = modifier
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .fillMaxSize()
+    ) {
         composable("list") { HelpList(navController) }
         composable("markdown/{markdownResId}") { backStackEntry ->
             val markdownResId = backStackEntry.arguments?.getString("markdownResId")?.toInt()
@@ -67,7 +81,11 @@ fun HelpList(modifier: Modifier = Modifier) {
 
 @Composable
 fun HelpList(navController: NavHostController) {
-    Column {
+    Column(
+        Modifier
+            .verticalScroll(rememberScrollState())
+            .fillMaxSize()
+    ) {
         FAQ(navController)
         Divider()
         ContactUs()
@@ -77,7 +95,11 @@ fun HelpList(navController: NavHostController) {
 @Composable
 private fun Markdown(markdownResId: Int?) {
     MarkdownView(
-        readRawFile(LocalContext.current, markdownResId!!), modifier = Modifier.padding(16.dp)
+        readRawFile(LocalContext.current, markdownResId!!),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
     )
 }
 

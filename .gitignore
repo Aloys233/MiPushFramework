@@ -7,9 +7,9 @@
 .externalNativeBuild
 .yuuta.jks
 gradle.properties
-gen/
-debug/
-release/
+/gen/
+/debug/
+/release/
 .classpath
 .project
 org.eclipse.buildship.core.prefs

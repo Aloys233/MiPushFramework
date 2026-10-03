@@ -83,9 +83,13 @@ private const val TIMEOUT_DEBUG = 5 * 60_000
         am: AlarmManager,
         expireAtElapsed: Long
     ) {
-        payload.putExtra(null, sbn)
+        val flags = if (SDK_INT >= M) {
+            FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            FLAG_UPDATE_CURRENT
+        }
         val pi =
-            PendingIntent.getBroadcast(context, identity, payload, FLAG_UPDATE_CURRENT)
+            PendingIntent.getBroadcast(context, identity, payload, flags)
         am.set(AlarmManager.ELAPSED_REALTIME, expireAtElapsed, pi)
     }
 
@@ -151,7 +155,14 @@ private const val TIMEOUT_DEBUG = 5 * 60_000
             context: Context?,
             identity: Int,
             retriever: Intent
-        ): PendingIntent? = PendingIntent.getBroadcast(context, identity, retriever, FLAG_NO_CREATE)
+        ): PendingIntent? {
+            val flags = if (SDK_INT >= M) {
+                FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                FLAG_NO_CREATE
+            }
+            return PendingIntent.getBroadcast(context, identity, retriever, flags)
+        }
 
         private fun restoreNotification(context: Context, sbn: StatusBarNotification) {
             var n = sbn.notification

@@ -139,7 +139,11 @@ public class PushControllerUtils {
             try {
                 IntentFilter filter = new IntentFilter();
                 filter.addAction(Intent.ACTION_SCREEN_ON);
-                context.registerReceiver(liveReceiver, filter);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(liveReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+                } else {
+                    context.registerReceiver(liveReceiver, filter);
+                }
             } catch (Throwable e) {
                 logger.e(e);
             }

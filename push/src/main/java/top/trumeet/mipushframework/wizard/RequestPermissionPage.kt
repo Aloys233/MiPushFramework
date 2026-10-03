@@ -45,6 +45,7 @@ import top.trumeet.mipushframework.component.MarkdownView
 import top.trumeet.mipushframework.main.MainPage
 import top.trumeet.mipushframework.wizard.permission.AlertWindowPermissionInfo
 import top.trumeet.mipushframework.wizard.permission.PermissionInfo
+import top.trumeet.mipushframework.wizard.permission.PostNotificationPermissionInfo
 import top.trumeet.mipushframework.wizard.permission.RequestIgnoreBatteryOptimizationsPermissionInfo
 import top.trumeet.mipushframework.wizard.permission.UsageStatsPermissionInfo
 import top.trumeet.ui.theme.Theme
@@ -111,6 +112,9 @@ private fun getPermissionInfos(context: Context): MutableList<PermissionInfo> {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             add(RequestIgnoreBatteryOptimizationsPermissionInfo(context))
             add(AlertWindowPermissionInfo(context))
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(PostNotificationPermissionInfo(context))
         }
         add(FinishedPhonyPermissionInfo(context))
     }

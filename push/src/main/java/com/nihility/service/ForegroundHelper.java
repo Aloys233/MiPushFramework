@@ -3,7 +3,9 @@ package com.nihility.service;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.util.Log;
 
 import androidx.core.app.NotificationChannelCompat;
 import androidx.core.app.NotificationChannelGroupCompat;
@@ -15,6 +17,7 @@ import com.nihility.Global;
 import com.xiaomi.xmsf.R;
 
 public class ForegroundHelper {
+    private static final String TAG = "ForegroundHelper";
     public static final String CHANNEL_STATUS = "status";
     public static final int NOTIFICATION_ALIVE_ID = 1;
     private final Service service;
@@ -37,18 +40,28 @@ public class ForegroundHelper {
     }
 
     void showForegroundNotificationToKeepAlive() {
-        //if (ConfigCenter.getInstance().foregroundNotification || Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        {
-            Notification notification = new NotificationCompat.Builder(service,
-                    CHANNEL_STATUS)
-                    .setContentTitle(service.getString(R.string.notification_alive))
-                    .setSmallIcon(R.drawable.ic_notifications_black_24dp)
-                    .setPriority(NotificationCompat.PRIORITY_MIN)
-                    .setOngoing(true)
-                    .setShowWhen(true)
-                    .build();
+        Notification notification = new NotificationCompat.Builder(service,
+                CHANNEL_STATUS)
+                .setContentTitle(service.getString(R.string.notification_alive))
+                .setSmallIcon(R.drawable.ic_notifications_black_24dp)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setOngoing(true)
+                .setShowWhen(true)
+                .build();
 
-            service.startForeground(NOTIFICATION_ALIVE_ID, notification);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                int foregroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    foregroundServiceType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+                }
+                service.startForeground(NOTIFICATION_ALIVE_ID, notification, foregroundServiceType);
+            } else {
+                service.startForeground(NOTIFICATION_ALIVE_ID, notification);
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to start foreground service", t);
         }
     }
 
