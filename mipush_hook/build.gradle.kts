@@ -32,6 +32,16 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    sourceSets {
+        // 本模块的切面类(com/nihility/**、com/xiaomi/**、Hook 等)必须由 AspectJ(ajc)编译,
+        // 才会生成 aspectOf()/hasAspect() 与 advice 派发代码;交给 javac 会导致被织入的 SDK
+        // 在运行时抛 NoSuchMethodError: MethodHooker.aspectOf()。
+        // 因此这里不编译 main 源码,所有类统一由根项目 weaveMiPushHook 生成的 hooked jar 提供。
+        getByName("main") {
+            java.setSrcDirs(emptyList<String>())
+        }
+    }
 }
 
 dependencies {

@@ -242,18 +242,25 @@ task weaveMiPushHook {
         def urls = cpFiles.collect { it.toURI().toURL() } as URL[]
         def urlLoader = new URLClassLoader(urls, Thread.currentThread().getContextClassLoader())
 
-        // 从 tempOutJar 中只保留原 jar 里的类，并使用 ASM 补全 StackMapTable 以兼容 Java 21
+        def enableAsmRewrite = true
+
+        // tempOutJar 同时包含:
+        //   1) 被 AspectJ 织入的 SDK 类(原 jar 的条目)
+        //   2) 由 ajc 编译的切面类(com/nihility/**、com/xiaomi/**、Hook 等)
+        // 二者都要保留:切面类必须由 ajc 编译,才会生成 aspectOf()/hasAspect() 及 advice 派发代码,
+        // 否则被织入的 SDK 在运行时会抛 NoSuchMethodError: MethodHooker.aspectOf()。
+        // 仅对 SDK 类做 ASM 重算 StackMapTable 以兼容 Java 21,切面类原样拷贝。
         if (outJar.exists()) outJar.delete()
         new java.util.zip.ZipOutputStream(new FileOutputStream(outJar)).withCloseable { zos ->
             new java.util.zip.ZipFile(tempOutJar).withCloseable { tempZip ->
                 def entries = tempZip.entries()
                 while (entries.hasMoreElements()) {
                     def entry = entries.nextElement()
-                    if (originalEntries.contains(entry.name)) {
+                    if (!entry.isDirectory()) {
                         def newEntry = new java.util.zip.ZipEntry(entry.name)
                         newEntry.time = entry.time
                         zos.putNextEntry(newEntry)
-                        if (entry.name.endsWith(".class")) {
+                        if (enableAsmRewrite && entry.name.endsWith(".class") && originalEntries.contains(entry.name)) {
                             byte[] rawBytes = tempZip.getInputStream(entry).bytes
                             try {
                                 def reader = new org.objectweb.asm.ClassReader(rawBytes)
