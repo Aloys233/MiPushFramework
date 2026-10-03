@@ -27,8 +27,15 @@ jobs:
 
     - name: Setup Android SDK Platform 37
       run: |
-        yes | sdkmanager --licenses || true
-        sdkmanager "platforms;android-37.0"
+        export ANDROID_HOME="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+        SDKMANAGER=$(which sdkmanager 2>/dev/null || find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -n 1)
+        if [ -z "$SDKMANAGER" ]; then
+          echo "sdkmanager not found in $ANDROID_HOME"
+          exit 1
+        fi
+        echo "Using sdkmanager: $SDKMANAGER"
+        yes | "$SDKMANAGER" --licenses 2>/dev/null || true
+        "$SDKMANAGER" "platforms;android-37.0"
         if [ -d "$ANDROID_HOME/platforms/android-37.0" ] && [ ! -d "$ANDROID_HOME/platforms/android-37" ]; then
           ln -s "$ANDROID_HOME/platforms/android-37.0" "$ANDROID_HOME/platforms/android-37"
           sed -i 's/AndroidVersion.ApiLevel=37.0/AndroidVersion.ApiLevel=37/' "$ANDROID_HOME/platforms/android-37/source.properties" || true
