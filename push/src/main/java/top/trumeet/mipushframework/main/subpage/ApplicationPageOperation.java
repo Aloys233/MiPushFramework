@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.icu.text.Transliterator;
 import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
@@ -13,7 +14,6 @@ import androidx.annotation.Nullable;
 
 import com.elvishew.xlog.Logger;
 import com.elvishew.xlog.XLog;
-import com.github.promeg.pinyinhelper.Pinyin;
 import com.nihility.Global;
 import com.xiaomi.xmsf.R;
 
@@ -23,6 +23,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import top.trumeet.common.utils.ElapsedTimer;
@@ -71,8 +72,11 @@ public class ApplicationPageOperation {
     }
 
     public static void addApplicationPinYinName(List<RegisteredApplication> res) {
+        Transliterator transliterator = Transliterator.getInstance("Han-Latin; Latin-ASCII");
         for (RegisteredApplication application : res) {
-            application.appNamePinYin = Pinyin.toPinyin(application.appName, "");
+            application.appNamePinYin = transliterator.transliterate(application.appName)
+                    .replaceAll("[\\s']", "")
+                    .toLowerCase(Locale.ROOT);
         }
     }
 
@@ -206,9 +210,10 @@ public class ApplicationPageOperation {
     }
 
     private static boolean isQueryMatched(RegisteredApplication info, String query) {
-        return info.getPackageName().toLowerCase().contains(query) ||
-                info.appName.toLowerCase().contains(query) ||
-                info.appNamePinYin.contains(query);
+        String lowerQuery = query.toLowerCase(Locale.ROOT);
+        return info.getPackageName().toLowerCase().contains(lowerQuery) ||
+                info.appName.toLowerCase().contains(lowerQuery) ||
+                info.appNamePinYin.contains(lowerQuery);
     }
 
     static MiPushApplications getMiPushApplicationsThatQueryMatched(String query) {

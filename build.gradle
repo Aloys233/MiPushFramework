@@ -13,7 +13,7 @@ buildscript {
 
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }
+        maven { url = uri("https://jitpack.io") }
         gradlePluginPortal()
     }
     dependencies {
@@ -37,7 +37,7 @@ allprojects {
 
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }
+        maven { url = uri("https://jitpack.io") }
         gradlePluginPortal()
     }
 
@@ -109,7 +109,7 @@ private String getVersionNameFromGit() {
 }
 
 ext {
-    minSdkVersion = 21
+    minSdkVersion = 33
     compileSdkVersion = 37
     targetSdkVersion = 37
     pushVersionCode = 7

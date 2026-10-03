@@ -141,9 +141,6 @@ dependencies {
     // The core module that provides APIs to a shell
     implementation "com.github.topjohnwu.libsu:core:5.0.5"
 
-    // https://mvnrepository.com/artifact/com.github.promeg/tinypinyin
-    implementation 'com.github.promeg:tinypinyin:2.0.3'
-
     // GreenDao
     implementation 'org.greenrobot:greendao:3.3.0'
 
