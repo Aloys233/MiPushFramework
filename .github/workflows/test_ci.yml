@@ -36,9 +36,11 @@ jobs:
         echo "Using sdkmanager: $SDKMANAGER"
         yes | "$SDKMANAGER" --licenses 2>/dev/null || true
         "$SDKMANAGER" "platforms;android-37.0"
-        if [ -d "$ANDROID_HOME/platforms/android-37.0" ] && [ ! -d "$ANDROID_HOME/platforms/android-37" ]; then
-          ln -s "$ANDROID_HOME/platforms/android-37.0" "$ANDROID_HOME/platforms/android-37"
-          sed -i 's/AndroidVersion.ApiLevel=37.0/AndroidVersion.ApiLevel=37/' "$ANDROID_HOME/platforms/android-37/source.properties" || true
+        if [ -d "$ANDROID_HOME/platforms/android-37.0" ]; then
+          rm -rf "$ANDROID_HOME/platforms/android-37"
+          mv "$ANDROID_HOME/platforms/android-37.0" "$ANDROID_HOME/platforms/android-37"
+          sed -i 's/platforms;android-37.0/platforms;android-37/g' "$ANDROID_HOME/platforms/android-37/package.xml" 2>/dev/null || true
+          sed -i 's/AndroidVersion.ApiLevel=37.0/AndroidVersion.ApiLevel=37/g' "$ANDROID_HOME/platforms/android-37/source.properties" 2>/dev/null || true
         fi
         mkdir -p "$ANDROID_HOME/tools/support"
         python3 -c "import zipfile; zipfile.ZipFile('$ANDROID_HOME/tools/support/annotations.jar', 'w').close()"
