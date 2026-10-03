@@ -4,15 +4,17 @@ buildscript {
     ext.kotlin_version = '2.0.21'
 
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/central") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        if (!System.getenv("CI")) {
+            maven { url = uri("https://maven.aliyun.com/repository/central") }
+            maven { url = uri("https://maven.aliyun.com/repository/public") }
+            maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+            maven { url = uri("https://maven.aliyun.com/repository/google") }
+        }
 
+        google()
         mavenCentral()
         maven { url 'https://jitpack.io' }
         gradlePluginPortal()
-        google()
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.8.2'
@@ -26,15 +28,17 @@ buildscript {
 
 allprojects {
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/central") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        if (!System.getenv("CI")) {
+            maven { url = uri("https://maven.aliyun.com/repository/central") }
+            maven { url = uri("https://maven.aliyun.com/repository/public") }
+            maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+            maven { url = uri("https://maven.aliyun.com/repository/google") }
+        }
 
+        google()
         mavenCentral()
         maven { url 'https://jitpack.io' }
         gradlePluginPortal()
-        google()
     }
 
     gradle.taskGraph.whenReady {
