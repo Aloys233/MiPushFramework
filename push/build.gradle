@@ -87,7 +87,7 @@ android {
                 pwd = properties.getProperty("KEY_PASSWORD")
             }
 
-            if (locale != null) {
+            if (locale != null && file(locale).exists()) {
                 storeFile file(locale)
                 storePassword keystorePwd
                 keyAlias alias
