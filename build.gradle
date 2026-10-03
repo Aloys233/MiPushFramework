@@ -76,7 +76,7 @@ def getVersionCode = { ->
 }
 
 def getVersionName = { ->
-    String versionName  = project.findProperty('versionName') ?: getVersionNameFromGit() ?: "VersionNameError"
+    String versionName  = project.findProperty('versionName') ?: getVersionNameFromGit() ?: "1.0.0"
     versionName = increaseVersionForPreRelease(versionName)
     return versionName.replaceFirst("^v", "")
 }
@@ -92,6 +92,20 @@ private static String increaseVersionForPreRelease(String versionName) {
 
 private static boolean isPreReleaseVersion(String versionName) {
     versionName.contains('-')
+}
+
+// 语义化 versionCode:1003000000 + major*10000 + minor*100 + patch
+// 基数 1003000000 远大于小米 SDK 要求的 106,保证兼容判断走新分支;
+// 同时随版本单调递增,便于设备覆盖安装/升级。
+static int versionCodeFromName(String versionName) {
+    def m = versionName =~ /(\d+)\.(\d+)(?:\.(\d+))?/
+    if (!m.find()) {
+        return 1003000000 + 10000   // 无法解析时回退到 1.0.0
+    }
+    int major = (m.group(1) ?: 0) as int
+    int minor = (m.group(2) ?: 0) as int
+    int patch = (m.group(3) ?: 0) as int
+    return 1003000000 + major * 10000 + minor * 100 + patch
 }
 
 private String getVersionNameFromGit() {
@@ -119,6 +133,7 @@ ext {
     snapshot = false
     versionBase = gitVersionName
     versionName = snapshot ? versionBase + "-SNAPSHOT" : versionBase
+    appVersionCode = versionCodeFromName(versionName)
     gitTag = versionName
 
     // Work

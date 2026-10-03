@@ -92,19 +92,6 @@ object NotificationManagerEx {
         }
     }
 
-    fun getNotificationChannelGroup(
-        packageName: String,
-        groupId: String?
-    ): NotificationChannelGroup? {
-        XLog.d(TAG, "getNotificationChannelGroup() called with: packageName = $packageName, groupId = $groupId")
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            TODO("compile error")
-            //notificationManager.getNotificationChannelGroup(groupId)
-        } else {
-            null
-        }
-    }
-
     fun getNotificationChannelGroups(
         packageName: String
     ): List<NotificationChannelGroup?>? {

@@ -16,7 +16,8 @@ android {
         // @see com.xiaomi.mipush.sdk.PushServiceClient#register
         // @see com.xiaomi.mipush.sdk.PushServiceClient#createServiceIntent
         // @see com.xiaomi.mipush.sdk.PushServiceClient#getPushServiceName
-        versionCode 1003003000
+        // 由版本名推导(1003000000 + major*10000 + minor*100 + patch),恒 ≥106 且随版本递增
+        versionCode rootProject.ext.appVersionCode
         versionName rootProject.ext.versionName
         archivesBaseName = "xmsf-v${versionName}"
 
@@ -50,20 +51,6 @@ android {
     productFlavors {
         normal {
             dimension "version"
-        }
-        vc105 {
-            dimension "version"
-            versionCode = 105
-        }
-        prebuilt {
-            dimension "version"
-        }
-    }
-    androidComponents {
-        onVariants(selector().all()) { variant ->
-            if(variant.name.startsWith("prebuilt")) {
-                variant.androidResources.noCompress.add('dex')
-            }
         }
     }
 
@@ -111,14 +98,6 @@ android {
         compose true
         buildConfig true
     }
-}
-
-android.applicationVariants.all { variant ->
-    String taskName = String.format("remove%sStubClasses", variant.name.capitalize())
-    task "${taskName}" {
-        doLast { delete "${layout.buildDirectory.get().asFile}/intermediates/classes/${variant.name}" + "/android" }
-    }
-    variant.getProcessJavaResourcesProvider().get().dependsOn(taskName)
 }
 
 dependencies {

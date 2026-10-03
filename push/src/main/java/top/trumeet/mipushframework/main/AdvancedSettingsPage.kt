@@ -138,7 +138,7 @@ private fun ExperimentalBlock() {
         setIceBoxSupported(context, iceBoxGranted)
     }
 
-    SettingsGroup(title = stringResource(R.string.settings_experimental)) {
+    SettingsGroup(title = stringResource(top.trumeet.common.R.string.settings_experimental)) {
         SettingsItem(
             title = stringResource(R.string.settings_mock_notification),
             summary = stringResource(R.string.settings_mock_notification_summary)

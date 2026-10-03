@@ -38,6 +38,25 @@ android {
     namespace 'com.oasisfeng.condom'
 }
 
+// Framework 桩类(android.content.* / android.telephony.* / com.android.internal.*)必须作为
+// 源码参与编译才能覆盖 android.jar,但绝不能进入运行时产物,因此在 javac 之后、所有 bundleLib* 之前删除其 class。
+android.libraryVariants.all { variant ->
+    def cap = variant.name.capitalize()
+    def javacClasses = layout.buildDirectory.dir(
+            "intermediates/javac/${variant.name}/compile${cap}JavaWithJavac/classes")
+    def stripStubs = tasks.register("strip${cap}StubClasses") {
+        dependsOn "compile${cap}JavaWithJavac"
+        outputs.upToDateWhen { false }
+        doLast {
+            def dir = javacClasses.get().asFile
+            delete new File(dir, 'android')
+            delete new File(dir, 'com/android')
+        }
+    }
+    tasks.matching { it.name.startsWith('bundleLib') && it.name.endsWith(cap) }
+            .configureEach { dependsOn stripStubs }
+}
+
 dependencies {
     implementation 'com.google.code.findbugs:jsr305:3.0.1'
     implementation 'androidx.annotation:annotation:1.0.0'
@@ -46,14 +65,6 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-}
-
-android.libraryVariants.all { variant ->
-    String taskName = String.format("remove%sStubClasses", variant.name.capitalize())
-    task "${taskName}" {
-        doLast { delete "${layout.buildDirectory.get().asFile}/intermediates/classes/${variant.name}" + "/android" }
-    }
-    variant.getProcessJavaResourcesProvider().get().dependsOn(taskName)
 }
 
 task sourcesJar(type: Jar) {

@@ -1,7 +1,5 @@
 package com.nihility.service;
 
-import static android.os.Build.VERSION.SDK_INT;
-import static android.os.Build.VERSION_CODES.P;
 import static top.trumeet.common.Constants.TAG_CONDOM;
 
 import android.content.Context;
@@ -11,7 +9,6 @@ import com.nihility.Global;
 import com.oasisfeng.condom.CondomContext;
 import com.xiaomi.channel.commonutils.reflect.JavaCalls;
 import com.xiaomi.push.revival.NotificationsRevivalForSelfUpdated;
-import com.xiaomi.push.service.BackgroundActivityStartEnabler;
 import com.xiaomi.push.service.PullAllApplicationDataFromServerJob;
 import com.xiaomi.push.service.XMPushService;
 import com.xiaomi.push.service.XMPushServiceMessenger;
@@ -32,14 +29,6 @@ public class XMPushServiceAbility extends XMPushServiceListenerNotifier {
         addListener(new RegisterRecordAbility(new RegisterRecorder(pushService)));
         addListener(new ForegroundAbility(new ForegroundHelper(pushService)));
         addListener(new MessengerAbility(new XMPushServiceMessenger(pushService)));
-        if (SDK_INT > P) {
-            addListener(new XMPushServiceListener() {
-                @Override
-                public void created() {
-                    BackgroundActivityStartEnabler.initialize(pushService);
-                }
-            });
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             addListener(new NotificationsRevivalAbility(new NotificationsRevivalForSelfUpdated(pushService, sbn -> sbn.getTag() == null)));
         }

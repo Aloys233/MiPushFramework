@@ -51,10 +51,13 @@ public class ForegroundHelper {
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                int foregroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                int foregroundServiceType;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    foregroundServiceType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+                    // remoteMessaging / specialUse 不受 Android 15+ 针对 dataSync 的 6 小时前台服务超时限制
+                    foregroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
                             | ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+                } else {
+                    foregroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
                 }
                 service.startForeground(NOTIFICATION_ALIVE_ID, notification, foregroundServiceType);
             } else {

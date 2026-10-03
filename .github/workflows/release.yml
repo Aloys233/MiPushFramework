@@ -1,14 +1,17 @@
-name: Test CI
+name: Release
 
 on:
   push:
-  pull_request:
-  workflow_dispatch:
+    tags:
+      - 'v*'
 
 jobs:
-  build:
+  release:
 
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     steps:
     - uses: actions/checkout@v4
@@ -52,26 +55,21 @@ jobs:
           echo ${{ secrets.SIGNING_KEY }} | base64 --decode > release.keystore
         fi
 
-    - name: Determine Version Name
-      id: ghd
-      run: |
-        SHORT_SHA=$(git rev-parse --short HEAD)
-        DESCRIBE=$(git describe --tags --always 2>/dev/null || true)
-        if [ -z "$DESCRIBE" ] || [ "$DESCRIBE" = "$SHORT_SHA" ]; then
-          COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
-          DESCRIBE="v1.0.${COUNT}-${SHORT_SHA}"
-        fi
-        echo "describe=$DESCRIBE" >> $GITHUB_OUTPUT
-        echo "Calculated version: $DESCRIBE"
-
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
     - name: Build with Gradle
-      run: ./gradlew assembleNormalRelease test -P versionName=${{ steps.ghd.outputs.describe }}
+      run: ./gradlew assembleNormalRelease test -P versionName=${{ github.ref_name }}
 
-    - name: Upload Normal Release
-      uses: actions/upload-artifact@v4.6.0
-      with:
-        name: xmsf-${{ steps.ghd.outputs.describe }}-normal-release
-        path: push/build/outputs/apk/normal/release/*.apk
+    - name: Publish APK to Release
+      # 直接在 Release 里附上原始 .apk,避免 artifact 被 GitHub 强制打包成 zip
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        TAG="${{ github.ref_name }}"
+        if gh release view "$TAG" >/dev/null 2>&1; then
+          gh release edit "$TAG" --title "$TAG"
+        else
+          gh release create "$TAG" --title "$TAG" --notes "MiPushFramework $TAG" --verify-tag
+        fi
+        gh release upload "$TAG" push/build/outputs/apk/normal/release/*.apk --clobber

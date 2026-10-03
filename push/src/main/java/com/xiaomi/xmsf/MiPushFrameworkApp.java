@@ -1,6 +1,5 @@
 package com.xiaomi.xmsf;
 
-import static com.xiaomi.xmsf.push.control.PushControllerUtils.isAppMainProc;
 import static com.xiaomi.xmsf.push.notification.NotificationController.CHANNEL_WARN;
 import static top.trumeet.common.Constants.TAG_CONDOM;
 
@@ -11,7 +10,6 @@ import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Build;
 
 import androidx.core.app.NotificationChannelCompat;
@@ -27,7 +25,6 @@ import com.oasisfeng.condom.CondomOptions;
 import com.oasisfeng.condom.CondomProcess;
 import com.xiaomi.xmsf.push.control.PushControllerUtils;
 import com.xiaomi.xmsf.push.control.XMOutbound;
-import com.xiaomi.xmsf.push.service.MiuiPushActivateService;
 import com.xiaomi.xmsf.utils.LogUtils;
 
 import top.trumeet.common.Constants;
@@ -38,9 +35,6 @@ import top.trumeet.mipush.provider.DatabaseUtils;
 
 public class MiPushFrameworkApp extends Application {
     private com.elvishew.xlog.Logger logger;
-
-    private static final String MIPUSH_EXTRA = "mipush_extra";
-
 
     @Override
     public void attachBaseContext(Context context) {
@@ -74,7 +68,6 @@ public class MiPushFrameworkApp extends Application {
 
         PushControllerUtils.setAllEnable(true, this);
 
-        awakePushActivateServiceOnMainProc(PushControllerUtils.wrapContext(this));
         requestDozeWhiteList();
     }
 
@@ -86,19 +79,6 @@ public class MiPushFrameworkApp extends Application {
             }
         } catch (RuntimeException e) {
             logger.e(e.getMessage(), e);
-        }
-    }
-
-    private void awakePushActivateServiceOnMainProc(Context context) {
-        if (isAppMainProc(this)) {
-            long currentTimeMillis = System.currentTimeMillis();
-            long elapsedMs = currentTimeMillis - getLastStartupTime();
-            int fiveMinutesMs = 300_000;
-            if (elapsedMs > fiveMinutesMs || elapsedMs < 0) {
-                setStartupTime(currentTimeMillis);
-                MiuiPushActivateService.awakePushActivateService(
-                        context, "com.xiaomi.xmsf.push.SCAN");
-            }
         }
     }
 
@@ -127,10 +107,10 @@ public class MiPushFrameworkApp extends Application {
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0,
                 removeDozeActivityIntent, flags);
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_WARN)
-                .setContentInfo(getString(R.string.wizard_title_doze_whitelist))
-                .setContentTitle(getString(R.string.wizard_title_doze_whitelist))
-                .setContentText(getString(R.string.wizard_descr_doze_whitelist))
-                .setTicker(getString(R.string.wizard_descr_doze_whitelist))
+                .setContentInfo(getString(top.trumeet.common.R.string.wizard_title_doze_whitelist))
+                .setContentTitle(getString(top.trumeet.common.R.string.wizard_title_doze_whitelist))
+                .setContentText(getString(top.trumeet.common.R.string.wizard_descr_doze_whitelist))
+                .setTicker(getString(top.trumeet.common.R.string.wizard_descr_doze_whitelist))
                 .setSmallIcon(R.drawable.ic_notifications_black_24dp)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setContentIntent(pendingIntent)
@@ -144,7 +124,7 @@ public class MiPushFrameworkApp extends Application {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannelCompat.Builder channel = new NotificationChannelCompat
                     .Builder(CHANNEL_WARN, NotificationManager.IMPORTANCE_HIGH)
-                    .setName(getString(R.string.wizard_title_doze_whitelist));
+                    .setName(getString(top.trumeet.common.R.string.wizard_title_doze_whitelist));
 
             NotificationChannelGroupCompat notificationChannelGroup =
                     new NotificationChannelGroupCompat.Builder(CHANNEL_WARN).setName(CHANNEL_WARN).build();
@@ -152,19 +132,6 @@ public class MiPushFrameworkApp extends Application {
             channel.setGroup(notificationChannelGroup.getId());
             manager.createNotificationChannel(channel.build());
         }
-    }
-
-
-    private long getLastStartupTime() {
-        return getDefaultPreferences().getLong("xmsf_startup", 0);
-    }
-
-    private boolean setStartupTime(long j) {
-        return getDefaultPreferences().edit().putLong("xmsf_startup", j).commit();
-    }
-
-    private SharedPreferences getDefaultPreferences() {
-        return getSharedPreferences(MIPUSH_EXTRA, 0);
     }
 
 }

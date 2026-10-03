@@ -45,17 +45,17 @@ public class SettingUtils {
     }
 
     public static void clearLog(Context context) {
-        Toast.makeText(context, context.getString(R.string.settings_clear_log) + " " + context.getString(R.string.start), Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, context.getString(R.string.settings_clear_log) + " " + context.getString(top.trumeet.common.R.string.start), Toast.LENGTH_SHORT).show();
         LogUtils.clearLog(context);
-        Toast.makeText(context, context.getString(R.string.settings_clear_log) + " " + context.getString(R.string.end), Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, context.getString(R.string.settings_clear_log) + " " + context.getString(top.trumeet.common.R.string.end), Toast.LENGTH_SHORT).show();
     }
 
     public static void clearHistory(Context context) {
         if (mClearingHistory.compareAndSet(false, true)) {
             new Thread(() -> {
-                Utils.makeText(context, context.getString(R.string.settings_clear_history) + " " + context.getString(R.string.start), Toast.LENGTH_SHORT);
+                Utils.makeText(context, context.getString(R.string.settings_clear_history) + " " + context.getString(top.trumeet.common.R.string.start), Toast.LENGTH_SHORT);
                 EventDb.deleteHistory();
-                Utils.makeText(context, context.getString(R.string.settings_clear_history) + " " + context.getString(R.string.end), Toast.LENGTH_SHORT);
+                Utils.makeText(context, context.getString(R.string.settings_clear_history) + " " + context.getString(top.trumeet.common.R.string.end), Toast.LENGTH_SHORT);
                 mClearingHistory.set(false);
             }).start();
         }

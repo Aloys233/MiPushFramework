@@ -33,12 +33,30 @@ android {
     namespace 'top.trumeet.common'
 }
 
+// Framework 桩类(android.app.ActivityManager / AppGlobals / AppOpsManager)必须作为源码
+// 参与编译才能覆盖 android.jar(编译期用其隐藏 API),但绝不能进入产物,否则会与平台类同名。
+// 注意 AppOpsManagerExtender 是真实功能类,必须保留(它依赖与 AppOpsManager 同包才能编译)。
 android.libraryVariants.all { variant ->
-    String taskName = String.format("remove%sStubClasses", variant.name.capitalize())
-    task "${taskName}" {
-        doLast { delete "${layout.buildDirectory.get().asFile}/intermediates/classes/${variant.name}" + "/android" }
+    def cap = variant.name.capitalize()
+    def javacClasses = layout.buildDirectory.dir(
+            "intermediates/javac/${variant.name}/compile${cap}JavaWithJavac/classes")
+    def stripStubs = tasks.register("strip${cap}StubClasses") {
+        dependsOn "compile${cap}JavaWithJavac"
+        outputs.upToDateWhen { false }
+        doLast {
+            def appDir = new File(javacClasses.get().asFile, 'android/app')
+            if (appDir.exists()) {
+                delete fileTree(dir: appDir, include: [
+                        'ActivityManager*.class',
+                        'AppGlobals*.class',
+                        'AppOpsManager.class',
+                        'AppOpsManager$*.class'
+                ])
+            }
+        }
     }
-    variant.getProcessJavaResourcesProvider().get().dependsOn(taskName)
+    tasks.matching { it.name.startsWith('bundleLib') && it.name.endsWith(cap) }
+            .configureEach { dependsOn stripStubs }
 }
 
 dependencies {
