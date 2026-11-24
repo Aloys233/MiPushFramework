@@ -25,6 +25,8 @@ public class MyNotificationIconHelper {
     private static final int READ_UNIT = 1024;
     private static final int STANDARD_DENSITY = 160;
     private static final int STANDARD_ICON_SIZE = 48;
+    private static final int MAX_DECODED_DIMENSION = 2048;
+    private static final long MAX_DECODED_PIXELS = 1024L * 1024L;
 
     /* loaded from: classes.dex */
     public static class GetIconResult {
@@ -83,76 +85,53 @@ public class MyNotificationIconHelper {
     }
 
     private static GetDataResult getDataFromUrl(String urlStr, int maxDownloadBytes) {
-        GetDataResult getDataResult;
         HttpURLConnection conn = null;
+        InputStream inputStream = null;
         try {
-            try {
-                URL url = new URL(urlStr);
-                HttpURLConnection conn2 = (HttpURLConnection) url.openConnection();
-                conn2.setConnectTimeout(CONNECT_TIMEOUT);
-                conn2.setReadTimeout(READ_TIMEOUT);
-                conn2.connect();
-                int contentLen = conn2.getContentLength();
-                if (contentLen > maxDownloadBytes) {
-                    MyLog.w("Bitmap size is too big, max size is " + maxDownloadBytes + "  contentLen size is " + contentLen + " from url " + urlStr);
-                    IOUtils.closeQuietly((InputStream) null);
-                    if (conn2 != null) {
-                        conn2.disconnect();
-                    }
-                    return null;
-                }
-                int responseCode = conn2.getResponseCode();
-                if (responseCode != 200) {
-                    MyLog.w("Invalid Http Response Code " + responseCode + " received");
-                    IOUtils.closeQuietly((InputStream) null);
-                    if (conn2 != null) {
-                        conn2.disconnect();
-                    }
-                    return null;
-                }
-                InputStream inputStream = conn2.getInputStream();
-                ByteArrayOutputStream tempOutStream = new ByteArrayOutputStream();
-                int availableSpace = maxDownloadBytes;
-                byte[] dataUnit = new byte[READ_UNIT];
-                while (availableSpace > 0) {
-                    int readCount = inputStream.read(dataUnit, 0, READ_UNIT);
-                    if (readCount == -1) {
-                        break;
-                    }
-                    availableSpace -= readCount;
-                    tempOutStream.write(dataUnit, 0, readCount);
-                }
-                if (availableSpace <= 0) {
-                    MyLog.w("length " + maxDownloadBytes + " exhausted.");
-                    getDataResult = new GetDataResult(null, maxDownloadBytes);
-                    IOUtils.closeQuietly(inputStream);
-                    if (conn2 == null) {
-                        return getDataResult;
-                    }
-                } else {
-                    byte[] data = tempOutStream.toByteArray();
-                    getDataResult = new GetDataResult(data, data.length);
-                    IOUtils.closeQuietly(inputStream);
-                    if (conn2 == null) {
-                        return getDataResult;
-                    }
-                }
-                conn2.disconnect();
-                return getDataResult;
-            } catch (IOException e) {
-                MyLog.e(e);
-                IOUtils.closeQuietly((InputStream) null);
-                if (0 != 0) {
-                    conn.disconnect();
-                }
+            URL url = new URL(urlStr);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(CONNECT_TIMEOUT);
+            conn.setReadTimeout(READ_TIMEOUT);
+            conn.connect();
+            int contentLen = conn.getContentLength();
+            if (contentLen > maxDownloadBytes) {
+                MyLog.w("Bitmap size is too big, max size is " + maxDownloadBytes + "  contentLen size is " + contentLen + " from url " + urlStr);
                 return null;
             }
-        } catch (Throwable th) {
-            IOUtils.closeQuietly((InputStream) null);
-            if (0 != 0) {
-                conn.disconnect();
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                MyLog.w("Invalid Http Response Code " + responseCode + " received");
+                return null;
             }
-            throw th;
+            inputStream = conn.getInputStream();
+            ByteArrayOutputStream tempOutStream = new ByteArrayOutputStream();
+            int availableSpace = maxDownloadBytes;
+            byte[] dataUnit = new byte[READ_UNIT];
+            while (availableSpace > 0) {
+                int readCount = inputStream.read(dataUnit, 0, Math.min(READ_UNIT, availableSpace));
+                if (readCount == -1) {
+                    break;
+                }
+                availableSpace -= readCount;
+                tempOutStream.write(dataUnit, 0, readCount);
+            }
+            if (availableSpace <= 0 && inputStream.read() != -1) {
+                MyLog.w("length " + maxDownloadBytes + " exhausted.");
+                return new GetDataResult(null, maxDownloadBytes);
+            }
+            byte[] data = tempOutStream.toByteArray();
+            return new GetDataResult(data, data.length);
+        } catch (Throwable e) {
+            MyLog.e(e);
+            return null;
+        } finally {
+            IOUtils.closeQuietly(inputStream);
+            if (conn != null) {
+                try {
+                    conn.disconnect();
+                } catch (Throwable ignored) {
+                }
+            }
         }
     }
 
@@ -184,6 +163,9 @@ public class MyNotificationIconHelper {
     }
 
     private static int getSampleSize(Context context, InputStream inputStream) {
+        if (inputStream == null) {
+            return 1;
+        }
         BitmapFactory.Options opt = new BitmapFactory.Options();
         opt.inJustDecodeBounds = true;
         BitmapFactory.decodeStream(inputStream, null, opt);
@@ -192,10 +174,34 @@ public class MyNotificationIconHelper {
             return 1;
         }
         int screenDensity = context.getResources().getDisplayMetrics().densityDpi;
-        int targetWidth = Math.round((screenDensity / 160.0f) * 48.0f);
-        if (opt.outWidth <= targetWidth || opt.outHeight <= targetWidth) {
+        int targetWidth = Math.max(1,
+                Math.round((screenDensity / (float) STANDARD_DENSITY) * STANDARD_ICON_SIZE));
+        return calculateSampleSize(opt.outWidth, opt.outHeight, targetWidth);
+    }
+
+    static int calculateSampleSize(int width, int height, int targetWidth) {
+        if (width <= 0 || height <= 0 || targetWidth <= 0) {
             return 1;
         }
-        return Math.min(opt.outWidth / targetWidth, opt.outHeight / targetWidth);
+        int sampleSize = 1;
+        if (width > targetWidth && height > targetWidth) {
+            int requested = Math.max(1, Math.min(width / targetWidth, height / targetWidth));
+            sampleSize = Integer.highestOneBit(requested);
+        }
+        while (decodedDimension(width, sampleSize) > MAX_DECODED_DIMENSION
+                || decodedDimension(height, sampleSize) > MAX_DECODED_DIMENSION
+                || decodedPixels(width, height, sampleSize) > MAX_DECODED_PIXELS) {
+            if (sampleSize > Integer.MAX_VALUE / 2) return Integer.MAX_VALUE;
+            sampleSize *= 2;
+        }
+        return sampleSize;
+    }
+
+    private static int decodedDimension(int size, int sampleSize) {
+        return (size + sampleSize - 1) / sampleSize;
+    }
+
+    private static long decodedPixels(int width, int height, int sampleSize) {
+        return (long) decodedDimension(width, sampleSize) * decodedDimension(height, sampleSize);
     }
 }

@@ -286,6 +286,9 @@ This could be the application doing a reverse registration, or the registration 
     <string name="last_receive">last receive: </string>
     <string name="mipush_services_not_found">Services Not Found</string>
     <string name="try_to_force_register_all_applications">Try to force register all applications</string>
-
+    <string name="notification_live_update_channel_name">Live Updates</string>
+    <string name="notification_live_update_channel_description">Real-time progress and live status updates</string>
+    <string name="settings_mock_live_notification">Simulate Live Update notification</string>
+    <string name="settings_mock_live_notification_summary">Tap repeatedly to advance progress (Android 16+ Live Updates)</string>
 
 </resources>

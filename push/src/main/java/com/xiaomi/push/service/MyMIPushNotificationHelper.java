@@ -23,6 +23,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
+import android.os.Process;
+import android.os.SystemClock;
 import android.service.notification.StatusBarNotification;
 import android.text.TextUtils;
 import android.widget.Toast;
@@ -44,22 +46,37 @@ import com.xiaomi.channel.commonutils.android.AppInfoUtils;
 import com.xiaomi.channel.commonutils.reflect.JavaCalls;
 import com.xiaomi.mipush.sdk.PushMessageProcessor;
 import com.xiaomi.push.sdk.MyPushMessageHandler;
+import com.xiaomi.xmpush.thrift.PushMessage;
 import com.xiaomi.xmpush.thrift.PushMetaInfo;
 import com.xiaomi.xmpush.thrift.XmPushActionContainer;
+import com.xiaomi.xmpush.thrift.XmPushActionSendMessage;
 import com.xiaomi.xmsf.R;
+import com.xiaomi.xmsf.push.notification.FocusNotificationSafety;
+import com.xiaomi.xmsf.push.notification.FocusOrderIdentityPolicy;
+import com.xiaomi.xmsf.push.notification.LiveUpdateTextDetector;
 import com.xiaomi.xmsf.push.notification.NotificationController;
 import com.xiaomi.xmsf.push.utils.Configurations;
 import com.xiaomi.xmsf.push.utils.IconConfigurations;
 import com.xiaomi.xmsf.push.utils.PackageConfig;
+import com.xiaomi.xmsf.push.utils.RegSecUtils;
 import com.xiaomi.xmsf.utils.ConfigCenter;
+import com.xiaomi.xmsf.utils.ConvertUtils;
+
+import org.apache.thrift.TBase;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import top.trumeet.common.Constants;
 import top.trumeet.common.utils.CustomConfiguration;
@@ -109,44 +126,133 @@ public class MyMIPushNotificationHelper {
 
     private static boolean tryLoadConfigurations = false;
 
-    private static ExecutorService executorService = Executors.newFixedThreadPool(3);
+    private static final int NOTIFICATION_QUEUE_CAPACITY = 16;
+    private static final AtomicInteger NOTIFICATION_THREAD_COUNT = new AtomicInteger(1);
+    private static final ThreadPoolExecutor executorService = createNotificationExecutor();
+    private static final KeyedSerialDispatcher<NotificationKey> notificationDispatcher =
+            new KeyedSerialDispatcher<>(
+                    executorService,
+                    (key, failure) -> logger.e("Notification task failed for " + key, failure));
+    private static final WakeScreenThrottle WAKE_SCREEN_THROTTLE =
+            new WakeScreenThrottle(SystemClock::elapsedRealtime);
+
+    private static ThreadPoolExecutor createNotificationExecutor() {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                3,
+                3,
+                30L,
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(NOTIFICATION_QUEUE_CAPACITY),
+                r -> {
+                    Thread t = new Thread(() -> {
+                        try {
+                            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+                        } catch (Throwable ignored) {
+                        }
+                        r.run();
+                    }, "mipush-notification-" + NOTIFICATION_THREAD_COUNT.getAndIncrement());
+                    t.setDaemon(false);
+                    return t;
+                },
+                new ThreadPoolExecutor.CallerRunsPolicy()
+        );
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
 
     /**
      * @see `MIPushNotificationHelper`#notifyPushMessage
      */
     public static void notifyPushMessage(Context context, byte[] decryptedContent) {
         XmPushActionContainer container = XMPushUtils.packToContainer(decryptedContent);
-        AppInfoUtils.AppNotificationOp notificationOp = AppInfoUtils.getAppNotificationOp(context, getTargetPackage(container), true);
+        String targetPackage = publishPackageName(container);
+        if (!isTargetPackageAvailable(context, targetPackage)) {
+            logger.i("Skip notification for unavailable target package " + targetPackage);
+            return;
+        }
+        AppInfoUtils.AppNotificationOp notificationOp = AppInfoUtils.getAppNotificationOp(context, targetPackage, true);
         if (notificationOp == AppInfoUtils.AppNotificationOp.NOT_ALLOWED) {
-            logger.w("Do not notify because user block " + getTargetPackage(container) + "'s notification");
+            logger.w("Do not notify because user block " + targetPackage + "'s notification");
         } else {
             loadConfigurationsOnce(context);
-            handleNotificationByConfigurations(context, decryptedContent, container.getPackageName(), container);
+            handleNotificationByConfigurations(context, decryptedContent, targetPackage, container);
+        }
+    }
+
+    static boolean isTargetPackageAvailable(Context context, String packageName) {
+        if (context == null || TextUtils.isEmpty(packageName)) return false;
+        try {
+            android.content.pm.ApplicationInfo info = context.getPackageManager().getApplicationInfo(packageName, 0);
+            return info != null && info.enabled;
+        } catch (PackageManager.NameNotFoundException ignored) {
+            return false;
+        } catch (Throwable error) {
+            logger.w("Unable to verify target package " + packageName, error);
+            return false;
         }
     }
 
     private static void handleNotificationByConfigurations(Context context, byte[] decryptedContent, String packageName, XmPushActionContainer container) {
+        Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        Set<String> operations = null;
         try {
-            Set<String> operations = Configurations.getInstance().handle(packageName, container);
-
-            if (operations.contains(PackageConfig.OPERATION_WAKE)) {
-                wakeScreen(context, packageName);
-            }
-            if (!operations.contains(PackageConfig.OPERATION_IGNORE)) {
-                executorService.execute(() -> {
-                    try {
-                        doNotifyPushMessage(context, container, decryptedContent);
-                    } catch (Exception e) {
-                        logger.e(e.getLocalizedMessage(), e);
-                    }
-                });
-            }
-            if (operations.contains(PackageConfig.OPERATION_OPEN)) {
-                MyPushMessageHandler.startService(context, container, decryptedContent);
-            }
+            operations = Configurations.getInstance().handle(packageName, container);
         } catch (Exception e) {
             logger.e(e.getLocalizedMessage(), e);
         }
+
+        NotificationDispatchPipeline.DispatchPlan plan =
+                NotificationDispatchPipeline.planFromOperations(operations);
+        NotificationDispatchPipeline.dispatch(
+                plan,
+                () -> wakeScreen(appContext, packageName),
+                () -> notificationDispatcher.execute(notificationKeyFor(container), () -> {
+                    try {
+                        doNotifyPushMessage(appContext, container, decryptedContent);
+                    } catch (Exception e) {
+                        logger.e(e.getLocalizedMessage(), e);
+                    }
+                }),
+                () -> MyPushMessageHandler.startService(appContext, container, decryptedContent),
+                (stage, exception) -> logger.e("Notification dispatch stage failed: " + stage, exception));
+    }
+
+    private static NotificationKey notificationKeyFor(XmPushActionContainer container) {
+        String packageName = publishPackageName(container);
+        return new NotificationKey(
+                packageName,
+                getNotificationTag(packageName),
+                getNotificationId(container));
+    }
+
+    private static String publishPackageName(@Nullable XmPushActionContainer container) {
+        if (container == null) {
+            return "";
+        }
+        if ("com.xiaomi.xmsf".equals(container.getPackageName())
+                && container.getMetaInfo() != null
+                && container.getMetaInfo().getExtra() != null) {
+            String wrappedTarget = container.getMetaInfo().getExtra().get("miui_package_name");
+            if (wrappedTarget != null && !wrappedTarget.trim().isEmpty()) {
+                return wrappedTarget.trim();
+            }
+        }
+        try {
+            String targetPackage = getTargetPackage(container);
+            if (targetPackage != null && !targetPackage.isEmpty()) {
+                return targetPackage;
+            }
+        } catch (Throwable error) {
+            logger.w("Unable to derive notification publish package", error);
+        }
+        if (container.getPackageName() != null && !container.getPackageName().isEmpty()) {
+            return container.getPackageName();
+        }
+        return "";
+    }
+
+    public static String getNotificationTargetPackage(@Nullable XmPushActionContainer container) {
+        return publishPackageName(container);
     }
 
     private static void loadConfigurationsOnce(Context context) {
@@ -172,19 +278,27 @@ public class MyMIPushNotificationHelper {
 
     private static void wakeScreen(Context context, String sourcePackage) {
         PowerManager powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        if (powerManager == null || powerManager.isInteractive()) {
+            return;
+        }
+        if (!WAKE_SCREEN_THROTTLE.tryAcquire(sourcePackage)) {
+            return;
+        }
         PowerManager.WakeLock fullWakeLock = powerManager.newWakeLock((
                 PowerManager.SCREEN_BRIGHT_WAKE_LOCK |
                         PowerManager.FULL_WAKE_LOCK |
                         PowerManager.ACQUIRE_CAUSES_WAKEUP
         ), "xmsf: configurations of " + sourcePackage);
-        fullWakeLock.acquire(10000);
+        fullWakeLock.acquire(5_000L);
     }
 
     private static Notification findActiveNotification(String packageName, int notificationId) {
         StatusBarNotification[] notifications = getNotificationManagerEx().getActiveNotifications(packageName);
-        assert notifications != null;
+        if (notifications == null) {
+            return null;
+        }
         for (StatusBarNotification notification : notifications) {
-            if (notification.getId() == notificationId) {
+            if (notification != null && notification.getId() == notificationId) {
                 return notification.getNotification();
             }
         }
@@ -218,7 +332,8 @@ public class MyMIPushNotificationHelper {
 
         NotificationInfo result = getNotificationFor(context, container, decryptedContent);
 
-        NotificationController.publish(context, metaInfo, result.notificationId, container.getPackageName(), result.notificationBuilder);
+        NotificationController.publish(context, metaInfo, result.notificationId,
+                publishPackageName(container), result.notificationBuilder);
     }
 
     private static void logPushMessage(PushMetaInfo metaInfo) {
@@ -231,7 +346,7 @@ public class MyMIPushNotificationHelper {
     @NonNull
     private static NotificationInfo getNotificationFor(Context context, XmPushActionContainer container, byte[] decryptedContent) {
         PushMetaInfo metaInfo = container.getMetaInfo();
-        String packageName = container.getPackageName();
+        String packageName = publishPackageName(container);
 
         Context pkgCtx = getPackageContext(context, packageName);
         NotificationCompat.MessagingStyle.Message message = createMessage(context, container, pkgCtx);
@@ -245,7 +360,7 @@ public class MyMIPushNotificationHelper {
         if (useMessagingStyle) {
             notificationBuilder = messagingStyleNotificationBuilder(context, container, notificationId, message, pkgCtx);
         } else {
-            notificationBuilder = normalStyleNotificationBuilder(context, container.getMetaInfo());
+            notificationBuilder = normalStyleNotificationBuilder(context, packageName, container.getMetaInfo());
         }
 
         if (metaInfo.getExtra() != null) {
@@ -254,7 +369,7 @@ public class MyMIPushNotificationHelper {
         addDebugAction(context, container, decryptedContent, metaInfo, packageName, notificationBuilder);
 
         notificationBuilder.setWhen(metaInfo.getMessageTs());
-        notificationBuilder.setShowWhen(true);
+        notificationBuilder.setShowWhen(custom.notificationShowWhen(true));
 
         String group = getGroupName(context, container);
         notificationBuilder.setGroup(group);
@@ -263,12 +378,14 @@ public class MyMIPushNotificationHelper {
         intentExtra.putExtra(Constants.INTENT_NOTIFICATION_ID, notificationId);
         intentExtra.putExtra(Constants.INTENT_NOTIFICATION_GROUP, notificationBuilder.build().getGroup());
 
-        PendingIntent localPendingIntent = getClickedPendingIntent(
+        ClickPendingIntent clickPendingIntent = getClickedPendingIntent(
                 context, container, decryptedContent, notificationId, intentExtra.getExtras());
 
-        if (localPendingIntent != null) {
-            notificationBuilder.setContentIntent(localPendingIntent);
-            carryPendingIntentForTemporarilyWhitelisted(context, container, notificationBuilder);
+        if (clickPendingIntent != null) {
+            notificationBuilder.setContentIntent(clickPendingIntent.pendingIntent);
+            if (!clickPendingIntent.activity) {
+                carryPendingIntentForTemporarilyWhitelisted(context, container, notificationBuilder);
+            }
         }
         return new NotificationInfo(notificationId, notificationBuilder);
     }
@@ -280,6 +397,41 @@ public class MyMIPushNotificationHelper {
         public NotificationInfo(int notificationId, NotificationCompat.Builder notificationBuilder) {
             this.notificationId = notificationId;
             this.notificationBuilder = notificationBuilder;
+        }
+    }
+
+    static final class NotificationKey {
+        final String packageName;
+        final String tag;
+        final int id;
+
+        NotificationKey(String packageName, String tag, int id) {
+            this.packageName = packageName == null ? "" : packageName;
+            this.tag = tag == null ? "" : tag;
+            this.id = id;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof NotificationKey)) return false;
+            NotificationKey that = (NotificationKey) other;
+            return id == that.id
+                    && packageName.equals(that.packageName)
+                    && tag.equals(that.tag);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = packageName.hashCode();
+            result = 31 * result + tag.hashCode();
+            result = 31 * result + id;
+            return result;
+        }
+
+        @Override
+        public String toString() {
+            return packageName + "/" + tag + "/" + id;
         }
     }
 
@@ -296,9 +448,26 @@ public class MyMIPushNotificationHelper {
     }
 
     @NonNull
-    private static NotificationCompat.Builder normalStyleNotificationBuilder(Context context, PushMetaInfo metaInfo) {
-        String title = metaInfo.getTitle();
-        String description = metaInfo.getDescription();
+    private static NotificationCompat.Builder normalStyleNotificationBuilder(
+            Context context, String packageName, PushMetaInfo metaInfo) {
+        CustomConfiguration configuration = XMPushUtils.getConfiguration(metaInfo);
+        String fallbackTitle = packageName;
+        try {
+            CharSequence appName = Global.ApplicationNameCache().getAppName(context, packageName);
+            if (appName != null && appName.length() > 0) {
+                fallbackTitle = appName.toString();
+            }
+        } catch (Throwable ignored) {
+        }
+        FocusNotificationSafety.ResolvedContent resolved = FocusNotificationSafety.resolveReadableContent(
+                metaInfo.getTitle(),
+                metaInfo.getDescription(),
+                configuration.focusParam(null),
+                configuration.focusParamCustom(null),
+                fallbackTitle,
+                "New notification");
+        String title = resolved.title();
+        String description = resolved.body();
 
         Bitmap bigPic = getBigPic(context, metaInfo);
 
@@ -307,8 +476,12 @@ public class MyMIPushNotificationHelper {
             NotificationCompat.BigPictureStyle style = new NotificationCompat.BigPictureStyle();
             style.bigPicture(bigPic);
             style.setBigContentTitle(title);
+            String imageDescription = configuration.imageDescription(null);
+            if (!TextUtils.isEmpty(imageDescription)) {
+                style.setContentDescription(imageDescription);
+            }
             notificationBuilder.setStyle(style);
-        } else if (description.length() > NOTIFICATION_BIG_STYLE_MIN_LEN) {
+        } else if (description.length() > NOTIFICATION_BIG_STYLE_MIN_LEN || configuration.hasFocusPayload()) {
             NotificationCompat.BigTextStyle style = new NotificationCompat.BigTextStyle();
             style.bigText(description);
             style.setBigContentTitle(title);
@@ -316,8 +489,15 @@ public class MyMIPushNotificationHelper {
         }
 
         String[] titleAndDesp = determineTitleAndDespByDIP(context, metaInfo);
-        notificationBuilder.setContentTitle(titleAndDesp[0]);
-        notificationBuilder.setContentText(titleAndDesp[1]);
+        FocusNotificationSafety.ResolvedContent dipResolved = FocusNotificationSafety.resolveReadableContent(
+                titleAndDesp[0],
+                titleAndDesp[1],
+                configuration.focusParam(null),
+                configuration.focusParamCustom(null),
+                title,
+                description);
+        notificationBuilder.setContentTitle(dipResolved.title());
+        notificationBuilder.setContentText(dipResolved.body());
         return notificationBuilder;
     }
 
@@ -478,16 +658,44 @@ public class MyMIPushNotificationHelper {
     private static void carryPendingIntentForTemporarilyWhitelisted(Context xmPushService, XmPushActionContainer buildContainer, NotificationCompat.Builder localBuilder) {
         PushMetaInfo metaInfo = buildContainer.getMetaInfo();
         // Also carry along the target PendingIntent, whose target will get temporarily whitelisted for background-activity-start upon sent.
-        final Intent targetIntent = buildTargetIntentWithoutExtras(buildContainer.getPackageName(), metaInfo);
+        final Intent targetIntent = buildTargetIntentWithoutExtras(publishPackageName(buildContainer), metaInfo);
         final PendingIntent pi = PendingIntent.getService(xmPushService, 0, targetIntent, getPendingIntentFlag(PendingIntent.FLAG_UPDATE_CURRENT, false));
         localBuilder.getExtras().putParcelable("mipush.target", pi);
     }
 
     public static int getNotificationId(XmPushActionContainer container) {
-        final PushMetaInfo metaInfo = container.getMetaInfo();
+        final PushMetaInfo metaInfo = container == null ? null : container.getMetaInfo();
+        if (metaInfo == null) {
+            return 0;
+        }
+        String packageName = publishPackageName(container);
+        Integer orderNotificationId = FocusOrderIdentityPolicy.resolveNotificationId(packageName, metaInfo);
+        if (orderNotificationId != null) {
+            return orderNotificationId;
+        }
         String id = metaInfo.isSetNotifyId() ? String.valueOf(metaInfo.getNotifyId()) : metaInfo.getId();
-        String idWithPackage = getTargetPackage(container) + "_" + id;
+        String idWithPackage = packageName + "_" + id;
         return idWithPackage.hashCode();
+    }
+
+    static int getClickRequestCode(
+            XmPushActionContainer container,
+            int notificationId,
+            @Nullable Intent routeIntent) {
+        PushMetaInfo metaInfo = container == null ? null : container.getMetaInfo();
+        StringBuilder identity = new StringBuilder()
+                .append(publishPackageName(container)).append('|')
+                .append(notificationId).append('|')
+                .append(metaInfo == null ? "" : metaInfo.getId()).append('|')
+                .append(metaInfo == null ? 0L : metaInfo.getMessageTs());
+        if (routeIntent != null) {
+            identity.append('|').append(routeIntent.getAction())
+                    .append('|').append(routeIntent.getDataString())
+                    .append('|').append(routeIntent.getComponent())
+                    .append('|').append(routeIntent.getFlags())
+                    .append('|').append(routeIntent.getCategories());
+        }
+        return identity.toString().hashCode();
     }
 
     public static String getNotificationTag(String packageName) {
@@ -495,12 +703,12 @@ public class MyMIPushNotificationHelper {
     }
 
     public static String getNotificationTag(XmPushActionContainer container) {
-        return getNotificationTag(container.packageName);
+        return getNotificationTag(publishPackageName(container));
     }
 
     private static String getGroupName(Context xmPushService, XmPushActionContainer buildContainer) {
         PushMetaInfo metaInfo = buildContainer.getMetaInfo();
-        String packageName = buildContainer.getPackageName();
+        String packageName = publishPackageName(buildContainer);
         RegisteredApplication application = RegisteredApplicationDb.getRegisteredApplication(packageName);
 
         CustomConfiguration configuration = XMPushUtils.getConfiguration(metaInfo);
@@ -509,6 +717,8 @@ public class MyMIPushNotificationHelper {
             group = packageName + "_" + GROUP_TYPE_MIPUSH_GROUP + "_" + group;
         } else if (metaInfo.passThrough == 1) {
             group = packageName + "_" + GROUP_TYPE_PASS_THROUGH;
+        } else if (configuration.hasFocusPayload() || LiveUpdateTextDetector.detectFromMetaInfo(metaInfo) != null) {
+            group = FocusNotificationSafety.stableFocusGroup(packageName);
         } else {
             group = packageName;
         }
@@ -553,13 +763,14 @@ public class MyMIPushNotificationHelper {
         return null;
     }
 
-    private static PendingIntent getClickedPendingIntent(
+    private static ClickPendingIntent getClickedPendingIntent(
             Context context, XmPushActionContainer container, byte[] decryptedContent,
             int notificationId, Bundle extra) {
         PushMetaInfo metaInfo = container.getMetaInfo();
         if (metaInfo == null) {
             return null;
         }
+        String targetPackage = publishPackageName(container);
 
         //Jump web
         String urlJump = null;
@@ -573,7 +784,9 @@ public class MyMIPushNotificationHelper {
             Intent intent = new Intent("android.intent.action.VIEW");
             intent.setData(Uri.parse(urlJump));
             intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
-            return PendingIntent.getActivity(context, notificationId, intent, getPendingIntentFlag(PendingIntent.FLAG_UPDATE_CURRENT, false));
+            return ClickPendingIntent.activity(PendingIntent.getActivity(
+                    context, getClickRequestCode(container, notificationId, intent), intent,
+                    getPendingIntentFlag(PendingIntent.FLAG_UPDATE_CURRENT, false)));
         }
 
         Intent intent = new Intent();
@@ -587,30 +800,64 @@ public class MyMIPushNotificationHelper {
         intent.addCategory(String.valueOf(metaInfo.getNotifyId()));
 
         CustomConfiguration configuration = XMPushUtils.getConfiguration(metaInfo);
-        boolean useActivity = configuration.useClickedActivity(false);
+        boolean liveUpdateLike = configuration.hasFocusPayload()
+                || LiveUpdateTextDetector.detectFromMetaInfo(metaInfo) != null;
+        boolean useActivity = configuration.useClickedActivity(false)
+                || (liveUpdateLike && !configuration.keys().contains("use_clicked_activity"));
         Intent activityIntent = getSdkIntent(context, container);
+        if (useActivity && activityIntent != null && !isActivityExported(context, activityIntent)) {
+            Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(targetPackage);
+            if (launchIntent != null && isActivityExported(context, launchIntent)) {
+                activityIntent = launchIntent;
+            } else {
+                activityIntent = null;
+            }
+        }
         if (!useActivity || activityIntent == null) {
-            return PendingIntent.getService(context, notificationId, intent, getPendingIntentFlag(PendingIntent.FLAG_UPDATE_CURRENT, false));
+            return ClickPendingIntent.service(PendingIntent.getService(
+                    context, getClickRequestCode(container, notificationId, null), intent,
+                    getPendingIntentFlag(PendingIntent.FLAG_UPDATE_CURRENT, false)));
         }
         activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         activityIntent.putExtra("mipush_serviceIntent", intent);
         activityIntent.putExtras(intent);
-        return PendingIntent.getActivity(context, notificationId, activityIntent, getPendingIntentFlag(PendingIntent.FLAG_UPDATE_CURRENT, false));
+        return ClickPendingIntent.activity(PendingIntent.getActivity(
+                context, getClickRequestCode(container, notificationId, activityIntent), activityIntent,
+                getPendingIntentFlag(PendingIntent.FLAG_UPDATE_CURRENT, false)));
+    }
+
+    private static final class ClickPendingIntent {
+        final PendingIntent pendingIntent;
+        final boolean activity;
+
+        private ClickPendingIntent(PendingIntent pendingIntent, boolean activity) {
+            this.pendingIntent = pendingIntent;
+            this.activity = activity;
+        }
+
+        static ClickPendingIntent activity(PendingIntent pendingIntent) {
+            return new ClickPendingIntent(pendingIntent, true);
+        }
+
+        static ClickPendingIntent service(PendingIntent pendingIntent) {
+            return new ClickPendingIntent(pendingIntent, false);
+        }
     }
 
     /**
      * @see PushMessageProcessor#getNotificationMessageIntent
      */
     public static Intent getSdkIntent(Context context, XmPushActionContainer container) {
-        String pkgName = container.packageName;
+        String pkgName = publishPackageName(container);
         PushMetaInfo paramPushMetaInfo = container.getMetaInfo();
-        Map<String, String> extra = paramPushMetaInfo.getExtra();
-        if (extra == null) {
+        if (paramPushMetaInfo == null) {
             return null;
         }
-
-        if (!extra.containsKey(PushConstants.EXTRA_PARAM_NOTIFY_EFFECT)) {
-            return null;
+        Map<String, String> extra = paramPushMetaInfo.getExtra();
+        Intent payloadIntent = getPayloadRouteIntent(context, container);
+        Intent focusIntent = getFocusRouteIntent(context, pkgName, paramPushMetaInfo);
+        if (extra == null || !extra.containsKey(PushConstants.EXTRA_PARAM_NOTIFY_EFFECT)) {
+            return focusIntent != null ? focusIntent : payloadIntent;
         }
 
         Intent intent = null;
@@ -678,13 +925,23 @@ public class MyMIPushNotificationHelper {
         }
 
 
+        if (intent == null || PushConstants.NOTIFICATION_CLICK_DEFAULT.equals(typeId)) {
+            if (focusIntent != null) {
+                intent = focusIntent;
+            } else if (payloadIntent != null) {
+                intent = payloadIntent;
+            }
+        } else if (!isActivityExported(context, intent)) {
+            if (focusIntent != null && isActivityExported(context, focusIntent)) {
+                intent = focusIntent;
+            } else if (payloadIntent != null && isActivityExported(context, payloadIntent)) {
+                intent = payloadIntent;
+            }
+        }
+
         if (intent != null) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (context.getPackageManager().resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) != null) {
-                //TODO fixit
-
-                //we don't have RegSecret we cannot decode push action
-
                 if (inFetchIntentBlackList(pkgName)) {
                     return null;
                 }
@@ -693,6 +950,144 @@ public class MyMIPushNotificationHelper {
             }
         }
 
+        return null;
+    }
+
+    private static final int PAYLOAD_ROUTE_MAX_DEPTH = 8;
+    private static final int PAYLOAD_ROUTE_MAX_NODES = 256;
+    private static final int PAYLOAD_ROUTE_MAX_LENGTH = 16 * 1024;
+    private static final int PAYLOAD_DOCUMENT_MAX_LENGTH = 64 * 1024;
+
+    @Nullable
+    private static Intent getPayloadRouteIntent(Context context, XmPushActionContainer container) {
+        try {
+            String pkgName = publishPackageName(container);
+            String regSec = RegSecUtils.getRegSec(container);
+            if (TextUtils.isEmpty(regSec) || TextUtils.isEmpty(pkgName)) {
+                return null;
+            }
+            TBase messageBody = ConvertUtils.getResponseMessageBodyFromContainer(container, regSec);
+            if (!(messageBody instanceof XmPushActionSendMessage)) {
+                return null;
+            }
+            PushMessage message = ((XmPushActionSendMessage) messageBody).getMessage();
+            if (message == null || TextUtils.isEmpty(message.getPayload())) {
+                return null;
+            }
+            String payload = message.getPayload().trim();
+            if (payload.length() > PAYLOAD_DOCUMENT_MAX_LENGTH) {
+                return null;
+            }
+            int[] nodeCount = new int[]{0};
+            if (payload.startsWith("{")) {
+                return findPayloadRoute(context, pkgName, new JSONObject(payload), 0, nodeCount);
+            }
+            if (payload.startsWith("[")) {
+                return findPayloadRoute(context, pkgName, new JSONArray(payload), 0, nodeCount);
+            }
+            return resolvePayloadRoute(context, pkgName, payload);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private static Intent findPayloadRoute(
+            Context context, String packageName, Object value, int depth, int[] nodeCount) {
+        if (value == null || depth > PAYLOAD_ROUTE_MAX_DEPTH || nodeCount[0]++ >= PAYLOAD_ROUTE_MAX_NODES) {
+            return null;
+        }
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            Iterator<String> keys = object.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                Object child = object.opt(key);
+                if (child instanceof String && isPayloadRouteKey(key)) {
+                    Intent candidate = resolvePayloadRoute(context, packageName, (String) child);
+                    if (candidate != null) {
+                        return candidate;
+                    }
+                }
+                Intent nested = findPayloadRoute(context, packageName, child, depth + 1, nodeCount);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+        } else if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value;
+            for (int i = 0; i < array.length(); i++) {
+                Intent nested = findPayloadRoute(context, packageName, array.opt(i), depth + 1, nodeCount);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+        } else if (value instanceof String) {
+            String candidate = ((String) value).trim();
+            if (candidate.startsWith("{") || candidate.startsWith("[")) {
+                try {
+                    Object nested = candidate.startsWith("{")
+                            ? new JSONObject(candidate) : new JSONArray(candidate);
+                    return findPayloadRoute(context, packageName, nested, depth + 1, nodeCount);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean isPayloadRouteKey(String key) {
+        if (TextUtils.isEmpty(key)) {
+            return false;
+        }
+        String normalized = key.toLowerCase(Locale.ROOT);
+        return normalized.equals("url")
+                || normalized.equals("uri")
+                || normalized.equals("scheme")
+                || normalized.equals("jump_scheme")
+                || normalized.equals("intent_uri")
+                || normalized.equals("deep_link")
+                || normalized.equals("deeplink")
+                || normalized.equals("link")
+                || normalized.endsWith("_url")
+                || normalized.endsWith("_uri");
+    }
+
+    @Nullable
+    private static Intent resolvePayloadRoute(Context context, String packageName, String value) {
+        if (context == null || TextUtils.isEmpty(packageName) || TextUtils.isEmpty(value)) {
+            return null;
+        }
+        String route = value.trim();
+        if (route.length() == 0 || route.length() > PAYLOAD_ROUTE_MAX_LENGTH
+                || route.indexOf('\n') >= 0 || route.indexOf('\r') >= 0
+                || route.endsWith("?") || route.endsWith("&")) {
+            return null;
+        }
+        try {
+            Intent intent;
+            if (route.startsWith("intent:")) {
+                intent = Intent.parseUri(route, Intent.URI_INTENT_SCHEME);
+            } else {
+                Uri uri = Uri.parse(route);
+                if (TextUtils.isEmpty(uri.getScheme())) {
+                    return null;
+                }
+                intent = new Intent(Intent.ACTION_VIEW, uri);
+            }
+            intent.setPackage(packageName);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ResolveInfo resolved = context.getPackageManager()
+                    .resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY);
+            if (resolved != null && resolved.activityInfo != null
+                    && resolved.activityInfo.exported
+                    && packageName.equals(resolved.activityInfo.packageName)) {
+                intent.setComponent(new ComponentName(
+                        resolved.activityInfo.packageName, resolved.activityInfo.name));
+                return intent;
+            }
+        } catch (Throwable ignored) {
+        }
         return null;
     }
 
@@ -856,6 +1251,61 @@ public class MyMIPushNotificationHelper {
             }
         }
         return null;
+    }
+
+    @Nullable
+    private static Intent getFocusRouteIntent(
+            Context context, String pkgName, PushMetaInfo metaInfo) {
+        if (context == null || TextUtils.isEmpty(pkgName) || metaInfo == null) {
+            return null;
+        }
+        try {
+            CustomConfiguration configuration = XMPushUtils.getConfiguration(metaInfo);
+            String param = configuration.focusParam(null);
+            String customParam = configuration.focusParamCustom(null);
+            if (!FocusNotificationSafety.isClickRoutePayload(param)
+                    && !FocusNotificationSafety.isClickRoutePayload(customParam)) {
+                return null;
+            }
+            FocusNotificationSafety.PortableFocusData focus =
+                    FocusNotificationSafety.parsePortableFocusData(param, customParam);
+            String route = focus.url();
+            if (TextUtils.isEmpty(route)) {
+                return null;
+            }
+            route = route.trim();
+            Intent candidate = route.startsWith("intent:")
+                    ? Intent.parseUri(route, Intent.URI_INTENT_SCHEME)
+                    : new Intent(Intent.ACTION_VIEW, Uri.parse(route));
+            candidate.setPackage(pkgName);
+            candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ResolveInfo resolved = context.getPackageManager()
+                    .resolveActivity(candidate, PackageManager.MATCH_DEFAULT_ONLY);
+            if (resolved != null && resolved.activityInfo != null
+                    && resolved.activityInfo.exported
+                    && pkgName.equals(resolved.activityInfo.packageName)) {
+                candidate.setComponent(new ComponentName(
+                        resolved.activityInfo.packageName, resolved.activityInfo.name));
+                return candidate;
+            }
+        } catch (Throwable error) {
+            logger.w("Unable to resolve focus click route for " + pkgName, error);
+        }
+        return null;
+    }
+
+    private static boolean isActivityExported(Context context, @Nullable Intent activityIntent) {
+        if (context == null || activityIntent == null) {
+            return false;
+        }
+        try {
+            ResolveInfo resolved = context.getPackageManager()
+                    .resolveActivity(activityIntent, PackageManager.MATCH_DEFAULT_ONLY);
+            return resolved != null && resolved.activityInfo != null
+                    && resolved.activityInfo.exported;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
 

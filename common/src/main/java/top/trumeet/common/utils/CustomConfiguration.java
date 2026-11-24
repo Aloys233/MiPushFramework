@@ -31,12 +31,20 @@ public class CustomConfiguration {
     private static final String CHANNEL_ID = "channel_id";
     private static final String CHANNEL_NAME = "channel_name";
     private static final String CHANNEL_DESCRIPTION = "channel_description";
+    private static final String CHANNEL_IMPORTANCE = "channel_importance";
     private static final String SOUND_URL = "sound_url";
+    private static final String SOUND_URI = "sound_uri";
     private static final String JOBKEY = "jobkey";
     private static final String USE_CLICKED_ACTIVITY = "use_clicked_activity";
     private static final String NOTIFICATION_GROUP = "notification_group";
     private static final String NOTIFICATION_BIGPIC_URI = "notification_bigPic_uri";
+    private static final String NOTIFICATION_SHOW_WHEN = "notification_show_when";
+    private static final String NOTIFICATION_SMALL_ICON_URI = "notification_small_icon_uri";
+    private static final String NOTIFICATION_SMALL_ICON_COLOR = "notification_small_icon_color";
+    private static final String IMAGE_DESCRIPTION = "img_describe";
     private static final String FOCUS_PARAM = "miui.focus.param";
+    private static final String FOCUS_PARAM_CUSTOM = "miui.focus.param.custom";
+    private static final String FOCUS_PICTURE_PREFIX = "miui.focus.pic_";
 
     private Map<String, String> mExtra = new HashMap<>();
 
@@ -106,8 +114,46 @@ public class CustomConfiguration {
         return get(CHANNEL_DESCRIPTION, defaultValue);
     }
 
+    public int channelImportance(int defaultValue) {
+        String value = get(CHANNEL_IMPORTANCE, null);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            int importance = Integer.parseInt(value);
+            return importance >= 0 && importance <= 5 ? importance : defaultValue;
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    public String soundUri(String defaultValue) {
+        return get(SOUND_URI, get(SOUND_URL, defaultValue));
+    }
+
     public String soundUrl(String defaultValue) {
-        return get(SOUND_URL, defaultValue);
+        return soundUri(defaultValue);
+    }
+
+    public boolean notificationShowWhen(boolean defaultValue) {
+        return getBooleanValue(NOTIFICATION_SHOW_WHEN, defaultValue);
+    }
+
+    public String notificationSmallIconUri(String defaultValue) {
+        return get(NOTIFICATION_SMALL_ICON_URI, defaultValue);
+    }
+
+    public String notificationSmallIconColor(String defaultValue) {
+        return get(NOTIFICATION_SMALL_ICON_COLOR, defaultValue);
+    }
+
+    public String imageDescription(String defaultValue) {
+        return get(IMAGE_DESCRIPTION, defaultValue);
+    }
+
+    public boolean getBooleanValue(String key, boolean defaultValue) {
+        String value = getExtraField(mExtra, key, null);
+        return value == null ? defaultValue : Boolean.parseBoolean(value);
     }
 
     public String jobkey(String defaultValue) {
@@ -135,6 +181,33 @@ public class CustomConfiguration {
 
     public String focusParam(String defaultValue) {
         return get(FOCUS_PARAM, defaultValue);
+    }
+
+    public String focusParamCustom(String defaultValue) {
+        return get(FOCUS_PARAM_CUSTOM, defaultValue);
+    }
+
+    public Map<String, String> focusPictureUrls() {
+        Map<String, String> result = new HashMap<>();
+        if (mExtra == null) {
+            return result;
+        }
+        for (Map.Entry<String, String> entry : mExtra.entrySet()) {
+            String key = entry.getKey();
+            if (key != null && key.startsWith(FOCUS_PICTURE_PREFIX)) {
+                result.put(key, entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    public boolean hasFocusPayload() {
+        String param = focusParam(null);
+        if (param != null && !param.trim().isEmpty()) {
+            return true;
+        }
+        String customParam = focusParamCustom(null);
+        return customParam != null && !customParam.trim().isEmpty();
     }
 
     public String textIcon(String defaultValue) {

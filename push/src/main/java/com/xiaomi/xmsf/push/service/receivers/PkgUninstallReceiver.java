@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat;
 
 import com.xiaomi.channel.commonutils.logger.MyLog;
 import com.xiaomi.push.service.PushServiceConstants;
+import com.xiaomi.xmsf.push.notification.NotificationController;
 
 public class PkgUninstallReceiver extends BroadcastReceiver {
     public PkgUninstallReceiver() {
@@ -19,10 +20,12 @@ public class PkgUninstallReceiver extends BroadcastReceiver {
             boolean var3 = var2.getExtras().getBoolean("android.intent.extra.REPLACING");
             Uri var4 = var2.getData();
             if (var4 != null && !var3) {
+                String removedPkg = var4.getEncodedSchemeSpecificPart();
+                NotificationController.cancelPackageNotifications(var1, removedPkg);
                 try {
                     Intent var5 = new Intent(var1, com.xiaomi.push.service.XMPushService.class);
                     var5.setAction(PushServiceConstants.ACTION_UNINSTALL);
-                    var5.putExtra(PushServiceConstants.EXTRA_UNINSTALL_PKG_NAME, var4.getEncodedSchemeSpecificPart());
+                    var5.putExtra(PushServiceConstants.EXTRA_UNINSTALL_PKG_NAME, removedPkg);
                     ContextCompat.startForegroundService(var1, var5);
                 } catch (Exception var7) {
                     MyLog.e(var7);

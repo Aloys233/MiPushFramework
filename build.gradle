@@ -76,7 +76,7 @@ def getVersionCode = { ->
 }
 
 def getVersionName = { ->
-    String versionName  = project.findProperty('versionName') ?: getVersionNameFromGit() ?: "1.0.0"
+    String versionName  = project.findProperty('versionName') ?: getVersionNameFromGit() ?: "1.1.0"
     versionName = increaseVersionForPreRelease(versionName)
     return versionName.replaceFirst("^v", "")
 }

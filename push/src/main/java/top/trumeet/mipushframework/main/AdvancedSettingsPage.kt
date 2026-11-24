@@ -147,6 +147,13 @@ private fun ExperimentalBlock() {
         }
 
         SettingsItem(
+            title = stringResource(R.string.settings_mock_live_notification),
+            summary = stringResource(R.string.settings_mock_live_notification_summary)
+        ) {
+            SettingUtils.notifyMockLiveUpdateNotification(context)
+        }
+
+        SettingsItem(
             title = stringResource(R.string.settings_icebox_permission),
             summary = stringResource(R.string.settings_icebox_permission_summary),
             checked = iceBoxGranted,

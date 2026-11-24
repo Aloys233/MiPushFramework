@@ -73,6 +73,10 @@ public class SettingUtils {
         NotificationController.test(context, packageName, title, description);
     }
 
+    public static void notifyMockLiveUpdateNotification(Context context) {
+        NotificationController.testLiveUpdate(context, BuildConfig.APPLICATION_ID);
+    }
+
     public static boolean isIceBoxInstalled() {
         return Utils.isAppInstalled(IceBox.PACKAGE_NAME);
     }
