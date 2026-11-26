@@ -46,7 +46,7 @@ name=MiPush Framework (System App)
 version=${TAG}
 versionCode=${REV_COUNT}
 author=Aloys23
-description=将 MiPushFramework (com.xiaomi.xmsf) 作为系统特权应用 (priv-app) 挂载并自动刷新包缓存，支持 Android 11+ 包可见性限制与离线推送通道。
+description=将 MiPushFramework (com.xiaomi.xmsf) 挂载为系统特权应用 (priv-app) 并流式安装至 /data/app 规避 KernelSU 默认 umount 闪退，同时自动刷新包缓存。
 EOF
 
 # 生成 post-fs-data.sh：在 PMS 启动前一次性清理 package_cache 与旧 dalvik-cache
@@ -64,12 +64,27 @@ if [ -f "$MODDIR/.clear_cache" ]; then
 fi
 EOF
 
-# 生成 service.sh：等待系统完全启动后再配置电池优化白名单，确保首次安装也生效
+# 生成 service.sh：开机后兜底补装（防止 Recovery 刷机或被回退到纯 /system/priv-app 后触发 KSU umount 闪退）并配置电池优化白名单
 cat << 'EOF' > "$MODULE_DIR/service.sh"
 #!/system/bin/sh
+MODDIR=${0%/*}
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
 done
+
+APK_PATH="$MODDIR/system/priv-app/com.xiaomi.xmsf/com.xiaomi.xmsf.apk"
+CUR_PATH=$(pm path com.xiaomi.xmsf 2>/dev/null || true)
+
+# 若刷入时 pm 不可用/失败（存在 .need_install），或当前仅运行在 /system/priv-app 下
+# （KernelSU 默认对非 Root 应用 umount /system/priv-app，会导致进程找不到自身 APK 秒闪退），
+# 则流式安装到 /data/app 形成 UPDATED_SYSTEM_APP，兼顾 PRIVILEGED 特权与免 umount 闪退。
+if [ -f "$APK_PATH" ] && { [ -f "$MODDIR/.need_install" ] || echo "$CUR_PATH" | grep -q "/system/priv-app/"; }; then
+    APK_SIZE=$(wc -c < "$APK_PATH")
+    if pm install -r -d -S "$APK_SIZE" < "$APK_PATH" >/dev/null 2>&1; then
+        rm -f "$MODDIR/.need_install"
+    fi
+fi
+
 dumpsys deviceidle whitelist +com.xiaomi.xmsf 2>/dev/null || true
 EOF
 
@@ -88,21 +103,28 @@ set_perm_recursive "$MODPATH/system/etc" 0 0 0755 0644
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
 
-# 不再在 customize.sh 里调用 pm install：
-# 1) 直接传入 $MODPATH (/data/adb/modules_update/...) 易受 SELinux 限制失败；
-# 2) pm install 会把 APK 写入 /data/app 形成 UPDATED_SYSTEM_APP，后续刷模块时反过来压住 /system/priv-app 新版。
-# 若检测到旧的 /data/app 覆盖层，则通过 pm uninstall-system-updates 移除（保留应用数据）。
-if command -v pm >/dev/null 2>&1; then
-    PKG_DUMP=$(dumpsys package com.xiaomi.xmsf 2>/dev/null || true)
-    if echo "$PKG_DUMP" | grep -q "UPDATED_SYSTEM_APP"; then
-        ui_print "- 检测到 /data/app 存在覆盖更新，正在移除以启用模块新版(保留数据)..."
-        pm uninstall-system-updates com.xiaomi.xmsf 2>&1 | while read -r line; do
+# 必须通过流式安装 (pm install -r -d -S <size> < apk) 同步写入 /data/app：
+# 1) KernelSU 默认对非 Root 应用执行 umount /system/priv-app，仅放系统分区会导致打开秒闪退；
+#    同步写入 /data/app 后，既通过 /system/priv-app 获得 SYSTEM + PRIVILEGED 权限，又通过 /data/app 避开 umount；
+# 2) 旧版直接传 $MODPATH (/data/adb/modules_update/...) 给 pm install 易被 SELinux 拦截导致版本不更新，
+#    改用 stdin 流式传输由 root 读取文件喂给 PMS，彻底绕过 /data/adb 权限限制。
+APK_PATH="$MODPATH/system/priv-app/com.xiaomi.xmsf/com.xiaomi.xmsf.apk"
+if [ -f "$APK_PATH" ]; then
+    if command -v pm >/dev/null 2>&1; then
+        APK_SIZE=$(wc -c < "$APK_PATH")
+        ui_print "- 正在流式安装更新应用 (${APK_SIZE} bytes)..."
+        INSTALL_OUT=$(pm install -r -d -S "$APK_SIZE" < "$APK_PATH" 2>&1)
+        INSTALL_RC=$?
+        echo "$INSTALL_OUT" | while IFS= read -r line; do
             ui_print "  $line"
         done
-    elif echo "$PKG_DUMP" | grep -q "codePath=/data/app/"; then
-        ui_print "! 注意：检测到已作为普通用户应用安装 com.xiaomi.xmsf"
-        ui_print "  若模块版本号更高且签名一致，重启后将自动接管为系统特权应用"
-        ui_print "  若同版本重装或签名不一致，请先卸载旧版后再重启"
+        if [ "$INSTALL_RC" -ne 0 ] || ! echo "$INSTALL_OUT" | grep -q "Success"; then
+            ui_print "! 即时安装未成功，已标记在开机后自动补装"
+            touch "$MODPATH/.need_install"
+        fi
+    else
+        ui_print "- 当前环境无 pm，已标记在开机后自动补装"
+        touch "$MODPATH/.need_install"
     fi
 fi
 
