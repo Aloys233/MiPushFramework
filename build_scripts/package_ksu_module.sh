@@ -1,8 +1,12 @@
 #!/bin/bash
 set -e
 
-TAG="${1:-v1.0.0}"
-APK_FILE=$(find push/build/outputs/apk/normal/release/ -name "*.apk" 2>/dev/null | head -n 1)
+TAG="${1:-v1.1.1}"
+CLEAN_TAG="${TAG#v}"
+APK_FILE=$(find push/build/outputs/apk/normal/release/ -maxdepth 1 -name "*${CLEAN_TAG}*.apk" 2>/dev/null | head -n 1)
+if [ -z "$APK_FILE" ]; then
+    APK_FILE=$(ls -t push/build/outputs/apk/normal/release/*.apk 2>/dev/null | head -n 1)
+fi
 
 if [ -z "$APK_FILE" ]; then
     echo "Error: APK file not found under push/build/outputs/apk/normal/release/!"
@@ -19,10 +23,15 @@ mkdir -p "$MODULE_DIR/system/etc/permissions"
 cp "$APK_FILE" "$MODULE_DIR/system/priv-app/com.xiaomi.xmsf/com.xiaomi.xmsf.apk"
 
 # 生成 privapp-permissions 白名单 xml
+# Android 9+ 在 ro.control_privapp_permissions=enforce 下会强制校验 priv-app 申请的所有
+# signature|privileged 权限，缺失会导致 system_server 启动时抛 IllegalStateException 卡二屏。
 cat << 'EOF' > "$MODULE_DIR/system/etc/permissions/privapp-permissions-com.xiaomi.xmsf.xml"
 <?xml version="1.0" encoding="utf-8"?>
 <permissions>
     <privapp-permissions package="com.xiaomi.xmsf">
+        <permission name="android.permission.UPDATE_APP_OPS_STATS"/>
+        <permission name="android.permission.PACKAGE_USAGE_STATS"/>
+        <permission name="android.permission.INTERACT_ACROSS_USERS"/>
     </privapp-permissions>
 </permissions>
 EOF
@@ -71,6 +80,7 @@ ui_print "****************************************"
 EOF
 
 ZIP_NAME="MiPushFramework-${TAG}-ksu-module.zip"
+rm -f "$ZIP_NAME"
 (cd "$MODULE_DIR" && zip -r "../../$ZIP_NAME" ./*)
 echo "Successfully packaged: $ZIP_NAME"
 
