@@ -46,7 +46,31 @@ name=MiPush Framework (System App)
 version=${TAG}
 versionCode=${REV_COUNT}
 author=Aloys23
-description=将 MiPushFramework (com.xiaomi.xmsf) 作为系统特权应用 (priv-app) 挂载并自动安装，支持 Android 11+ 包可见性限制与离线推送通道。
+description=将 MiPushFramework (com.xiaomi.xmsf) 作为系统特权应用 (priv-app) 挂载并自动刷新包缓存，支持 Android 11+ 包可见性限制与离线推送通道。
+EOF
+
+# 生成 post-fs-data.sh：在 PMS 启动前一次性清理 package_cache 与旧 dalvik-cache
+# 解决 KernelSU/EROFS 模块 APK 固定时间戳导致重启后命中旧包缓存、版本号不刷新的问题
+cat << 'EOF' > "$MODULE_DIR/post-fs-data.sh"
+#!/system/bin/sh
+MODDIR=${0%/*}
+
+if [ -f "$MODDIR/.clear_cache" ]; then
+    rm -rf /data/system/package_cache/* 2>/dev/null || true
+    rm -rf /data/dalvik-cache/arm/*com.xiaomi.xmsf* \
+           /data/dalvik-cache/arm64/*com.xiaomi.xmsf* \
+           /data/dalvik-cache/x86_64/*com.xiaomi.xmsf* 2>/dev/null || true
+    rm -f "$MODDIR/.clear_cache"
+fi
+EOF
+
+# 生成 service.sh：等待系统完全启动后再配置电池优化白名单，确保首次安装也生效
+cat << 'EOF' > "$MODULE_DIR/service.sh"
+#!/system/bin/sh
+while [ "$(getprop sys.boot_completed)" != "1" ]; do
+    sleep 2
+done
+dumpsys deviceidle whitelist +com.xiaomi.xmsf 2>/dev/null || true
 EOF
 
 # 生成 customize.sh
@@ -61,21 +85,34 @@ ui_print "- 正在配置系统特权应用权限..."
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm_recursive "$MODPATH/system/priv-app" 0 0 0755 0644
 set_perm_recursive "$MODPATH/system/etc" 0 0 0755 0644
+set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
+set_perm "$MODPATH/service.sh" 0 0 0755
 
-APK_PATH="$MODPATH/system/priv-app/com.xiaomi.xmsf/com.xiaomi.xmsf.apk"
-if [ -f "$APK_PATH" ]; then
-    ui_print "- 正在自动安装应用 (pm install)..."
-    pm install -r -d "$APK_PATH" 2>&1 | while read -r line; do
-        ui_print "  $line"
-    done
+# 不再在 customize.sh 里调用 pm install：
+# 1) 直接传入 $MODPATH (/data/adb/modules_update/...) 易受 SELinux 限制失败；
+# 2) pm install 会把 APK 写入 /data/app 形成 UPDATED_SYSTEM_APP，后续刷模块时反过来压住 /system/priv-app 新版。
+# 若检测到旧的 /data/app 覆盖层，则通过 pm uninstall-system-updates 移除（保留应用数据）。
+if command -v pm >/dev/null 2>&1; then
+    PKG_DUMP=$(dumpsys package com.xiaomi.xmsf 2>/dev/null || true)
+    if echo "$PKG_DUMP" | grep -q "UPDATED_SYSTEM_APP"; then
+        ui_print "- 检测到 /data/app 存在覆盖更新，正在移除以启用模块新版(保留数据)..."
+        pm uninstall-system-updates com.xiaomi.xmsf 2>&1 | while read -r line; do
+            ui_print "  $line"
+        done
+    elif echo "$PKG_DUMP" | grep -q "codePath=/data/app/"; then
+        ui_print "! 注意：检测到已作为普通用户应用安装 com.xiaomi.xmsf"
+        ui_print "  若模块版本号更高且签名一致，重启后将自动接管为系统特权应用"
+        ui_print "  若同版本重装或签名不一致，请先卸载旧版后再重启"
+    fi
 fi
 
-ui_print "- 正在配置电池优化白名单..."
-dumpsys deviceidle whitelist +com.xiaomi.xmsf 2>/dev/null || true
+ui_print "- 正在清理系统包缓存并标记重启刷新..."
+touch "$MODPATH/.clear_cache"
+rm -rf /data/system/package_cache/* 2>/dev/null || true
 
 ui_print "****************************************"
 ui_print " 安装成功！"
-ui_print " 重启手机后将完全生效为系统特权应用喵~"
+ui_print " 重启手机后将自动生效为最新系统特权应用喵~"
 ui_print "****************************************"
 EOF
 
